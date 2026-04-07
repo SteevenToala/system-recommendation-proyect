@@ -1,0 +1,237 @@
+import os
+import sys
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+from pathlib import Path
+
+import pandas as pd
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from logica.recomendacion import (
+    cargar_datos_mongo,
+    construir_dataframes_modelo,
+    preparar_datos,
+    recomendar_peliculas,
+)
+
+
+class AppRecomendacion:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title('Sistema de Recomendacion BI Final')
+        self.root.geometry('1100x700')
+
+        self.df = None
+        self.dataframes_modelo = None
+        self.recomendaciones_actuales = pd.DataFrame()
+
+        self._build_ui()
+        self._cargar_datos_iniciales()
+
+    def _build_ui(self):
+        frame_superior = ttk.Frame(self.root, padding=12)
+        frame_superior.pack(fill=tk.X)
+
+        ttk.Label(frame_superior, text='Cliente:').grid(row=0, column=0, padx=4, pady=4, sticky='w')
+        self.combo_clientes = ttk.Combobox(frame_superior, width=50, state='readonly')
+        self.combo_clientes.grid(row=0, column=1, padx=4, pady=4, sticky='w')
+
+        ttk.Label(frame_superior, text='Recomendaciones:').grid(row=0, column=2, padx=4, pady=4, sticky='w')
+        self.entry_n = ttk.Entry(frame_superior, width=8)
+        self.entry_n.insert(0, '10')
+        self.entry_n.grid(row=0, column=3, padx=4, pady=4, sticky='w')
+
+        ttk.Label(frame_superior, text='Vecinos:').grid(row=0, column=4, padx=4, pady=4, sticky='w')
+        self.entry_vecinos = ttk.Entry(frame_superior, width=8)
+        self.entry_vecinos.insert(0, '20')
+        self.entry_vecinos.grid(row=0, column=5, padx=4, pady=4, sticky='w')
+
+        self.btn_recomendar = ttk.Button(frame_superior, text='Generar recomendaciones', command=self.generar_recomendaciones)
+        self.btn_recomendar.grid(row=0, column=6, padx=8, pady=4)
+
+        self.btn_exportar = ttk.Button(frame_superior, text='Exportar', command=self.exportar_csv)
+        self.btn_exportar.grid(row=0, column=7, padx=8, pady=4)
+
+        self.btn_recargar = ttk.Button(frame_superior, text='Recargar datos', command=self._cargar_datos_iniciales)
+        self.btn_recargar.grid(row=0, column=8, padx=8, pady=4)
+
+        frame_estado = ttk.Frame(self.root, padding=(12, 0, 12, 8))
+        frame_estado.pack(fill=tk.X)
+        self.lbl_estado = ttk.Label(frame_estado, text='Listo.')
+        self.lbl_estado.pack(anchor='w')
+
+        frame_contexto = ttk.LabelFrame(self.root, text='Resumen del Cliente', padding=10)
+        frame_contexto.pack(fill=tk.X, padx=12, pady=(0, 8))
+
+        self.txt_contexto = tk.Text(frame_contexto, height=6, wrap='word')
+        self.txt_contexto.pack(fill=tk.X)
+
+        frame_tabla = ttk.LabelFrame(self.root, text='Recomendaciones', padding=10)
+        frame_tabla.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+
+        columnas = ('pelicula_titulo', 'categoria_nombre', 'score_final', 'motivo')
+        self.tree = ttk.Treeview(frame_tabla, columns=columnas, show='headings', height=20)
+
+        self.tree.heading('pelicula_titulo', text='Pelicula')
+        self.tree.heading('categoria_nombre', text='Categoria')
+        self.tree.heading('score_final', text='Score')
+        self.tree.heading('motivo', text='Motivo')
+
+        self.tree.column('pelicula_titulo', width=270, anchor='w')
+        self.tree.column('categoria_nombre', width=120, anchor='w')
+        self.tree.column('score_final', width=80, anchor='center')
+        self.tree.column('motivo', width=540, anchor='w')
+
+        scrollbar_y = ttk.Scrollbar(frame_tabla, orient='vertical', command=self.tree.yview)
+        scrollbar_x = ttk.Scrollbar(frame_tabla, orient='horizontal', command=self.tree.xview)
+        self.tree.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
+
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        scrollbar_x.pack(side=tk.BOTTOM, fill=tk.X)
+
+    def _cargar_datos_iniciales(self):
+        try:
+            self.df = preparar_datos(cargar_datos_mongo())
+            self.dataframes_modelo = construir_dataframes_modelo(self.df)
+        except Exception as exc:
+            messagebox.showerror('Error de carga', f'No se pudieron cargar los datos desde MongoDB.\n\nDetalle: {exc}')
+            self.lbl_estado.config(text='Error al cargar datos.')
+            return
+
+        clientes = self.df[['cliente_ref']].drop_duplicates().copy()
+        if 'cliente_nombre_completo' in self.df.columns:
+            nombres = self.df[['cliente_ref', 'cliente_nombre_completo']].drop_duplicates(subset=['cliente_ref'])
+            clientes = clientes.merge(nombres, on='cliente_ref', how='left')
+            clientes['etiqueta'] = clientes.apply(
+                lambda fila: str(fila['cliente_nombre_completo']).strip() if pd.notna(fila['cliente_nombre_completo']) and str(fila['cliente_nombre_completo']).strip() else str(fila['cliente_ref']),
+                axis=1,
+            )
+        else:
+            clientes['etiqueta'] = clientes['cliente_ref'].astype(str)
+
+        clientes = clientes.sort_values('etiqueta')
+        self.mapa_etiqueta_a_cliente = {fila['etiqueta']: str(fila['cliente_ref']) for _, fila in clientes.iterrows()}
+
+        etiquetas = list(self.mapa_etiqueta_a_cliente.keys())
+        self.combo_clientes['values'] = etiquetas
+        if etiquetas:
+            self.combo_clientes.set(etiquetas[0])
+
+        self._limpiar_tabla()
+        self.txt_contexto.delete('1.0', tk.END)
+        self.txt_contexto.insert(tk.END, 'Selecciona un cliente y presiona "Generar recomendaciones".')
+        self.lbl_estado.config(text=f'Datos cargados: {len(self.df)} registros, {len(etiquetas)} clientes.')
+
+    def _limpiar_tabla(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+    def _obtener_cliente_seleccionado(self):
+        etiqueta = self.combo_clientes.get().strip()
+        if not etiqueta:
+            raise ValueError('Debes seleccionar un cliente.')
+        if etiqueta not in self.mapa_etiqueta_a_cliente:
+            raise ValueError('Cliente no valido en la lista.')
+        return self.mapa_etiqueta_a_cliente[etiqueta]
+
+    def generar_recomendaciones(self):
+        try:
+            if self.df is None:
+                raise ValueError('No hay datos cargados.')
+            if self.dataframes_modelo is None:
+                self.dataframes_modelo = construir_dataframes_modelo(self.df)
+
+            cliente_id = str(self._obtener_cliente_seleccionado())
+            n = int(self.entry_n.get().strip())
+            vecinos = int(self.entry_vecinos.get().strip())
+            if n <= 0 or vecinos <= 0:
+                raise ValueError('Los campos Recomendaciones y Vecinos deben ser mayores a cero.')
+
+            recomendaciones, contexto = recomendar_peliculas(
+                self.df,
+                cliente_id=cliente_id,
+                n_recomendaciones=n,
+                n_vecinos=vecinos,
+                dataframes_modelo=self.dataframes_modelo,
+            )
+
+            self.recomendaciones_actuales = recomendaciones.copy()
+            self._limpiar_tabla()
+
+            for _, fila in recomendaciones.iterrows():
+                self.tree.insert(
+                    '',
+                    tk.END,
+                    values=(
+                        fila.get('pelicula_titulo', ''),
+                        fila.get('categoria_nombre', ''),
+                        f"{float(fila.get('score_final', 0.0)):.4f}",
+                        fila.get('motivo', ''),
+                    ),
+                )
+
+            self._mostrar_contexto(contexto)
+            self.lbl_estado.config(text=f"Recomendaciones generadas para {contexto.get('cliente_mostrar', 'cliente seleccionado')}.")
+
+        except Exception as exc:
+            messagebox.showerror('Error', str(exc))
+            self.lbl_estado.config(text='No se pudieron generar recomendaciones.')
+
+    def _mostrar_contexto(self, contexto):
+        lineas = [
+            f"Cliente: {contexto.get('cliente_mostrar', '')}",
+            f"Registros historicos: {contexto.get('historico_total', '')}",
+            f"Peliculas unicas vistas: {contexto.get('peliculas_unicas_vistas', '')}",
+            f"Vecinos consultados: {contexto.get('vecinos_consultados', '')}",
+        ]
+
+        if contexto.get('segmento_cliente'):
+            lineas.append(f"Segmento del cliente: {contexto.get('segmento_cliente')}")
+
+        if contexto.get('vecino_mas_similar_mostrar') is not None:
+            lineas.append(
+                f"Cliente mas similar: {contexto.get('vecino_mas_similar_mostrar')} (similitud {contexto.get('similitud_maxima', 0):.3f})"
+            )
+
+        categorias = contexto.get('categorias_preferidas', {})
+        if categorias:
+            top = ', '.join([f"{cat}: {peso:.1%}" for cat, peso in categorias.items()])
+            lineas.append(f'Categorias preferidas: {top}')
+
+        self.txt_contexto.delete('1.0', tk.END)
+        self.txt_contexto.insert(tk.END, '\n'.join(lineas))
+
+    def exportar_csv(self):
+        if self.recomendaciones_actuales.empty:
+            messagebox.showwarning('Sin datos', 'Primero genera recomendaciones para poder exportar.')
+            return
+
+        ruta = filedialog.asksaveasfilename(
+            title='Guardar recomendaciones',
+            defaultextension='.csv',
+            filetypes=[('CSV', '*.csv')],
+            initialfile='recomendaciones.csv',
+        )
+        if not ruta:
+            return
+
+        try:
+            self.recomendaciones_actuales.to_csv(ruta, index=False)
+            self.lbl_estado.config(text=f'CSV exportado: {os.path.basename(ruta)}')
+            messagebox.showinfo('Exportacion completa', f'Se guardo el archivo:\n{ruta}')
+        except Exception as exc:
+            messagebox.showerror('Error al exportar', str(exc))
+
+
+def main():
+    root = tk.Tk()
+    AppRecomendacion(root)
+    root.mainloop()
+
+
+if __name__ == '__main__':
+    main()
