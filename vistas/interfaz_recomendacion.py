@@ -30,6 +30,11 @@ class AppRecomendacion:
         self.df = None
         self.dataframes_modelo = None
         self.recomendaciones_actuales = pd.DataFrame()
+        self.algoritmos_disponibles = {
+            'Similitud de coseno': 'coseno',
+            'Slope One': 'slope_one',
+            'Item a Item': 'item_item',
+        }
 
         self._build_ui()
         self._cargar_datos_iniciales()
@@ -52,14 +57,20 @@ class AppRecomendacion:
         self.entry_vecinos.insert(0, '20')
         self.entry_vecinos.grid(row=0, column=5, padx=4, pady=4, sticky='w')
 
+        ttk.Label(frame_superior, text='Algoritmo:').grid(row=0, column=6, padx=4, pady=4, sticky='w')
+        self.combo_algoritmo = ttk.Combobox(frame_superior, width=24, state='readonly')
+        self.combo_algoritmo['values'] = list(self.algoritmos_disponibles.keys())
+        self.combo_algoritmo.set('Similitud de coseno')
+        self.combo_algoritmo.grid(row=0, column=7, padx=4, pady=4, sticky='w')
+
         self.btn_recomendar = ttk.Button(frame_superior, text='Generar recomendaciones', command=self.generar_recomendaciones)
-        self.btn_recomendar.grid(row=0, column=6, padx=8, pady=4)
+        self.btn_recomendar.grid(row=0, column=8, padx=8, pady=4)
 
         self.btn_exportar = ttk.Button(frame_superior, text='Exportar', command=self.exportar_csv)
-        self.btn_exportar.grid(row=0, column=7, padx=8, pady=4)
+        self.btn_exportar.grid(row=0, column=9, padx=8, pady=4)
 
         self.btn_recargar = ttk.Button(frame_superior, text='Recargar datos', command=self._cargar_datos_iniciales)
-        self.btn_recargar.grid(row=0, column=8, padx=8, pady=4)
+        self.btn_recargar.grid(row=0, column=10, padx=8, pady=4)
 
         frame_estado = ttk.Frame(self.root, padding=(12, 0, 12, 8))
         frame_estado.pack(fill=tk.X)
@@ -166,6 +177,8 @@ class AppRecomendacion:
             cliente_id = str(self._obtener_cliente_seleccionado())
             n = int(self.entry_n.get().strip())
             vecinos = int(self.entry_vecinos.get().strip())
+            algoritmo_label = self.combo_algoritmo.get().strip()
+            algoritmo = self.algoritmos_disponibles.get(algoritmo_label, 'coseno')
             if n <= 0 or vecinos <= 0:
                 raise ValueError('Los campos Recomendaciones y Vecinos deben ser mayores a cero.')
 
@@ -175,6 +188,7 @@ class AppRecomendacion:
                 n_recomendaciones=n,
                 n_vecinos=vecinos,
                 dataframes_modelo=self.dataframes_modelo,
+                algoritmo=algoritmo,
             )
 
             self.recomendaciones_actuales = recomendaciones.copy()

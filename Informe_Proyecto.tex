@@ -85,7 +85,7 @@
 \section{Portada}
 \begin{flushleft}
 \begin{tabular}{ l l }
-    \textbf{Tema:} & Sistema BI de segmentacion KMeans y recomendacion hibrida \\
+    \textbf{Tema:} & Sistema BI de segmentacion KMeans y recomendacion con 3 algoritmos \\
     \textbf{Unidad de Organizacion Curricular:} & Profesional. \\
     \textbf{Nivel y Paralelo:} & 6to - A \\
     \textbf{Alumnos participantes:} & Toala Steeven \\
@@ -108,7 +108,7 @@ Desarrollar un flujo integral de analitica de datos para alquiler de peliculas q
     \item Integrar datos de hechos y dimensiones desde Excel hacia un modelo enriquecido y legible para negocio.
     \item Construir DataFrames agregados utiles para analisis de peliculas, categorias y perfiles de clientes.
     \item Implementar segmentacion de clientes usando KMeans con variables de actividad, gasto y variedad.
-    \item Desarrollar un recomendador hibrido que combine filtrado colaborativo, contenido y ajuste por cluster.
+    \item Desarrollar tres recomendadores colaborativos (similitud de coseno, Slope One e item-item) seleccionables desde interfaz.
     \item Mejorar la interpretabilidad mediante motivos de recomendacion y desglose del calculo del score final.
     \item Presentar resultados mediante interfaz grafica y visualizaciones de clusters orientadas a usuarios no tecnicos.
 \end{itemize}
@@ -119,29 +119,21 @@ El proyecto implementa una arquitectura por capas para resolver un caso de negoc
 Sobre esta base se generan DataFrames agregados desde MongoDB: resumen de peliculas, resumen de categorias y perfil de clientes. Estos artefactos alimentan dos componentes clave:
 \begin{itemize}
     \item Segmentacion de clientes con KMeans en \texttt{logica/clusters.py}.
-    \item Recomendacion hibrida en \texttt{logica/recomendacion.py}.
+    \item Motor de recomendacion con 3 algoritmos en \texttt{logica/recomendacion.py}.
 \end{itemize}
 
-El recomendador combina once senales ponderadas, entre ellas similitud coseno cliente-cliente, afinidad por categoria, popularidad, ajuste temporal y ajuste por segmento KMeans. El score final se calcula como suma ponderada:
+La implementacion actual del recomendador soporta 3 algoritmos seleccionables desde la interfaz:
+\begin{itemize}
+    \item Similitud de coseno (usuario-usuario).
+    \item Slope One.
+    \item Item-Item collaborative filtering.
+\end{itemize}
 
-\[
-\text{score\_final} = \sum_{i=1}^{11} w_i s_i
-\]
-
-Con la implementacion actual:
-
-\begin{align*}
-\text{score\_final} =
-&\;0.30\,s_{colaborativo} + 0.16\,s_{categoria} + 0.11\,s_{popularidad} + 0.07\,s_{ingreso} \\
-&+ 0.05\,s_{duracion} + 0.08\,s_{categoria\_global} + 0.07\,s_{ajuste\_cliente} \\
-&+ 0.04\,s_{temporal} + 0.02\,s_{diversidad} + 0.06\,s_{cluster\_ajuste} + 0.04\,s_{cluster\_categoria}
-\end{align*}
-
-En la interfaz Tkinter, el usuario puede seleccionar cliente, generar recomendaciones, visualizar motivo principal y revisar el detalle matematico del score por pelicula. En paralelo, la vista de clusters entrega graficos en ventanas separadas con descripciones para facilitar interpretacion.
+En la interfaz Tkinter, el usuario selecciona cliente, define parametros (recomendaciones y vecinos), elige algoritmo y genera resultados. Esto permite comparar metodos de recomendacion sobre el mismo historial de consumo.
 
 \subsection{Desarrollo tecnico detallado del sistema}
 
-\subsubsection{1) Proceso ETL completo: desde Excel hasta JSON y MongoDB}
+\subsubsection{Proceso ETL completo: desde Excel hasta JSON y MongoDB}
 El flujo inicia en \texttt{logica/carga\_datos.py} con el archivo \texttt{BI-FINAL.xlsx}. Este modulo tiene como objetivo transformar una estructura transaccional con IDs tecnicos en un fact enriquecido, legible y listo para analitica.
 
 \paragraph{Paso 1: lectura de hojas y control de existencia}
@@ -184,7 +176,7 @@ Antes de guardar, se eliminan columnas que inician con \texttt{id\_}. El resulta
 \end{itemize}
 Se ejecuta \texttt{collection.drop()} para evitar duplicados entre corridas y garantizar consistencia de una carga completa por ejecucion.
 
-\subsubsection{2) Como se construyen y para que sirven los DataFrames}
+\subsubsection{Como se construyen y para que sirven los DataFrames}
 La capa \texttt{logica/dataframes.py} construye DataFrames agregados desde MongoDB para separar calculo analitico de la capa de interfaz.
 
 \paragraph{DataFrame 1: \texttt{df\_resumen\_peliculas}}
@@ -208,7 +200,7 @@ Se agrupa por \texttt{cliente\_ref} y se calcula:
     \item \texttt{peliculas\_unicas} y \texttt{categorias\_unicas} (variedad),
     \item \texttt{gasto\_total} y \texttt{gasto\_promedio} (capacidad de gasto).
 \end{itemize}
-\textbf{Por que se usa:} es el vector de comportamiento que alimenta KMeans y tambien componentes del recomendador.
+\textbf{Por que se usa:} es el vector de comportamiento que alimenta KMeans y permite interpretar el perfil del cliente.
 
 \paragraph{Normalizaciones aplicadas}
 Para combinar metricas con escalas distintas se usa:
@@ -222,7 +214,7 @@ En categorias se define un score combinado:
 \text{score\_categoria\_global}=0.6\cdot\text{popularidad\_categoria\_norm}+0.4\cdot\text{ingreso\_categoria\_norm}
 \]
 
-\subsubsection{3) Algoritmo de clusters: como se obtienen exactamente}
+\subsubsection{Algoritmo de clusters: como se obtienen exactamente}
 La segmentacion esta en \texttt{logica/clusters.py} y usa KMeans sobre \texttt{df\_perfil\_clientes}.
 
 \paragraph{Variables de entrada al modelo}
@@ -265,78 +257,148 @@ kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
 base['cluster_id'] = kmeans.fit_predict(X_scaled)
 \end{lstlisting}
 
-\subsubsection{4) Algoritmo del sistema de recomendacion: desglose completo}
-El modulo \texttt{logica/recomendacion.py} implementa un recomendador hibrido de 11 senales.
+\subsubsection{Sistema de recomendacion: 3 algoritmos implementados}
+El modulo \texttt{logica/recomendacion.py} implementa 3 motores de recomendacion seleccionables.
 
-\paragraph{Etapa A: preparacion y matrices base}
+\paragraph{Etapa A: preparacion comun para los 3 algoritmos}
 \begin{itemize}
-    \item Se construye \texttt{cliente\_ref} y \texttt{pelicula\_ref} en formato legible.
-    \item Se arma matriz cliente-pelicula por conteo de alquileres.
-    \item Se separan peliculas vistas y candidatas no vistas.
+    \item Se construye \texttt{cliente\_ref} y \texttt{pelicula\_ref}.
+    \item Se arma matriz usuario-item con valoracion basada en \texttt{ingreso} promedio.
+    \item Se separan peliculas ya vistas y peliculas candidatas.
 \end{itemize}
 
-\paragraph{Etapa B: similitud colaborativa}
-Se calcula similitud coseno cliente-cliente:
+\paragraph{Representacion de datos usada por los algoritmos}
+El sistema trabaja con dos representaciones clave:
+\begin{itemize}
+    \item \textbf{Matriz de interacciones} (conteos): para saber si el cliente ya vio un item y construir candidatos.
+    \item \textbf{Matriz de valoraciones} (promedio de ingreso por cliente-item): para estimar preferencias con coseno, Slope One e item-item.
+\end{itemize}
+Si un par cliente-item no existe, se interpreta como valor faltante. En operaciones algebraicas se usa relleno con cero solo cuando el algoritmo requiere producto matricial.
+
+\paragraph{Relacion con VSM (Vector Space Model)}
+El sistema incorpora una representacion tipo \textit{Vector Space Model} en los algoritmos basados en similitud de coseno. En este enfoque, cada cliente o pelicula se representa como un vector dentro de un espacio multidimensional, donde cada dimension corresponde a una interaccion, una valoracion o una caracteristica del catalogo.
+
+Esto permite calcular cercania entre vectores usando similitud coseno. En el caso de \textbf{usuario-usuario}, cada cliente se representa por su patron de consumo. En el caso de \textbf{item-item}, cada pelicula se representa por su patron de relaciones con otros items o con los usuarios que la consumieron. Cuanto mas cercanos son los vectores, mayor es la similitud entre los elementos comparados.
+
+La formula general es:
 \[
 \cos(\theta)=\frac{u\cdot v}{\|u\|\,\|v\|}
 \]
-Con los \texttt{n\_vecinos} mas similares se estima una preferencia ponderada por pelicula candidata.
 
-\paragraph{Etapa C: senales de contenido y contexto}
-Para cada candidato se calculan:
-\begin{itemize}
-    \item \texttt{score\_categoria}: afinidad del cliente con la categoria.
-    \item \texttt{score\_categoria\_global}: fortaleza global de la categoria.
-    \item \texttt{score\_popularidad}, \texttt{score\_ingreso}, \texttt{score\_duracion} desde resumen de peliculas.
-    \item \texttt{score\_ajuste\_cliente}: cercania entre ingreso promedio de pelicula y gasto promedio del cliente.
-    \item \texttt{score\_temporal}: similitud entre patron mensual del cliente y patron mensual de la pelicula.
-    \item \texttt{score\_diversidad}: incentivo a categorias menos consumidas por ese cliente.
-\end{itemize}
+\textbf{Importante:} \texttt{Slope One} no pertenece al enfoque VSM, porque no compara vectores por angulo o distancia, sino que predice a partir de desviaciones promedio entre pares de items.
 
-\paragraph{Etapa D: senales de cluster}
-Usando la segmentacion KMeans:
-\begin{itemize}
-    \item \texttt{score\_cluster\_ajuste}: cercania entre ingreso de pelicula y centro economico del cluster.
-    \item \texttt{score\_cluster\_categoria}: frecuencia de la categoria dentro del mismo cluster del cliente.
-\end{itemize}
+\paragraph{Algoritmo: Similitud de coseno (usuario-usuario)}
+Compara el vector de consumo del cliente objetivo con otros clientes:
+\[
+\cos(\theta)=\frac{u\cdot v}{\|u\|\,\|v\|}
+\]
+Luego estima la valoracion de cada candidato mediante promedio ponderado por similitud de los vecinos.
 
-\paragraph{Etapa E: score final y ranking}
-El ranking se obtiene por suma ponderada:
-\begin{align*}
-\text{score\_final}=
-&\;0.30\,s_{colaborativo}+0.16\,s_{categoria}+0.11\,s_{popularidad}+0.07\,s_{ingreso} \\
-&+0.05\,s_{duracion}+0.08\,s_{categoria\_global}+0.07\,s_{ajuste\_cliente} \\
-&+0.04\,s_{temporal}+0.02\,s_{diversidad}+0.06\,s_{cluster\_ajuste}+0.04\,s_{cluster\_categoria}
-\end{align*}
+Prediccion utilizada para un item \(i\) y usuario \(u\):
+\[
+\hat{r}_{u,i}=\frac{\sum_{v\in N_u} sim(u,v)\cdot r_{v,i}}{\sum_{v\in N_u}|sim(u,v)|}
+\]
+donde \(N_u\) son los vecinos mas similares del usuario objetivo.
 
-Fragmento representativo del codigo aplicado:
 \begin{lstlisting}
-candidatos['score_final'] = (
-    candidatos['score_colaborativo'] * 0.30
-    + candidatos['score_categoria'] * 0.16
-    + candidatos['score_popularidad'] * 0.11
-    + candidatos['score_ingreso'] * 0.07
-    + candidatos['score_duracion'] * 0.05
-    + candidatos['score_categoria_global'] * 0.08
-    + candidatos['score_ajuste_cliente'] * 0.07
-    + candidatos['score_temporal'] * 0.04
-    + candidatos['score_diversidad'] * 0.02
-    + candidatos['score_cluster_ajuste'] * 0.06
-    + candidatos['score_cluster_categoria'] * 0.04
-)
+vecinos = calcular_similitud_coseno(matriz_fill, cliente_id).head(n_vecinos)
+for vecino_id, sim in vecinos.items():
+    rating = matriz_val.loc[vecino_id, pelicula_ref]
+    total += sim * rating
+    peso_total += abs(sim)
+score = total / peso_total
 \end{lstlisting}
 
-Luego se ordena de mayor a menor \texttt{score\_final} y se devuelven las \texttt{n\_recomendaciones} top.
+\textbf{Ventaja principal:} capta patrones entre usuarios con gustos parecidos.\
+\textbf{Riesgo:} pierde precision si hay pocos vecinos con historial suficiente.
 
-\paragraph{Etapa F: explicabilidad}
-Cada fila recomendada incorpora:
+\paragraph{Algoritmo: Slope One}
+Slope One aprende desviaciones promedio entre pares de items a partir de usuarios que consumieron ambos. La prediccion para un item candidato se basa en:
+\[
+\hat{r}_{u,i}=\frac{\sum_{j\in I_u}(dev_{i,j}+r_{u,j})\cdot f_{i,j}}{\sum_{j\in I_u}f_{i,j}}
+\]
+donde \(dev_{i,j}\) es la desviacion promedio y \(f_{i,j}\) la frecuencia de co-ocurrencia del par.
+
+Interpretacion:
 \begin{itemize}
-    \item \texttt{motivo}: explicacion corta para lectura rapida.
-    \item \texttt{motivo\_detalle}: desglose numerico tipo \texttt{valor x peso = aporte} por cada senal.
+    \item Si historicamente \(i\) suele valer 1.2 unidades por encima de \(j\), y el usuario valoro \(j\) alto, entonces \(i\) tiende a recibir prediccion alta.
+    \item El termino \(f_{i,j}\) pondera confianza: pares con mas evidencia pesan mas.
 \end{itemize}
-Esto permite auditar el por que de cada resultado.
 
-\subsubsection{5) Como funciona la interfaz del sistema}
+\begin{lstlisting}
+dev[item_i][item_j] += (rating_i - rating_j)
+freq[item_i][item_j] += 1
+pred += (dev[item_candidato][item_visto] + rating_visto) * f
+\end{lstlisting}
+
+\textbf{Ventaja principal:} robusto y explicable con poca parametrizacion.\
+\textbf{Riesgo:} puede degradar si la matriz esta muy dispersa y hay baja co-ocurrencia entre items.
+
+\paragraph{Algoritmo: Item-Item}
+Calcula similitud coseno entre items y predice cada candidato usando los items ya vistos por el cliente con mayor similitud.
+
+Prediccion:
+\[
+\hat{r}_{u,i}=\frac{\sum_{j\in S_k(i)} sim(i,j)\cdot r_{u,j}}{\sum_{j\in S_k(i)}|sim(i,j)|}
+\]
+donde \(S_k(i)\) son los \(k\) items vistos mas similares al candidato \(i\).
+
+\begin{lstlisting}
+sim_matrix = cand_mat @ seen_mat.T
+sim_matrix = sim_matrix / (||cand|| * ||seen||)
+top_idx = np.argpartition(sims, -k)[-k:]
+score = dot(top_sims, top_ratings) / sum(abs(top_sims))
+\end{lstlisting}
+
+\textbf{Ventaja principal:} recomendado cuando los perfiles de usuario cambian rapido pero las relaciones entre items se mantienen estables.\
+\textbf{Riesgo:} puede ser costoso si se calcula similitud total item-item sin optimizacion.
+
+\paragraph{Optimizacion aplicada en Item-Item}
+En la primera version, el algoritmo construia toda la matriz item-item con bucles anidados, lo que podia congelar la interfaz. Se optimizo para calcular solo similitudes entre items candidatos y items vistos por el cliente mediante operaciones vectorizadas de \texttt{numpy}. Esta mejora reduce significativamente el tiempo de respuesta y evita bloqueos de la UI.
+
+Comparacion conceptual de costo:
+\begin{itemize}
+    \item Enfoque inicial (matriz completa): crece aproximadamente con el cuadrado del numero de items.
+    \item Enfoque optimizado: calcula solo candidato-vs-vistos, reduciendo trabajo innecesario y latencia perceptible en la UI.
+\end{itemize}
+
+\paragraph{Parametros operativos y su impacto}
+\begin{itemize}
+    \item \texttt{n\_recomendaciones}: numero de items finales mostrados.
+    \item \texttt{n\_vecinos}: en Coseno define vecinos por usuario; en Item-Item define cantidad de items similares usados en la prediccion; en Slope One no altera la formula principal.
+\end{itemize}
+
+Guia practica:
+\begin{itemize}
+    \item Valores bajos de \texttt{n\_vecinos} tienden a mayor especializacion.
+    \item Valores altos tienden a mayor estabilidad, pero con riesgo de diluir señales fuertes.
+\end{itemize}
+
+\paragraph{Casos limite y controles implementados}
+\begin{itemize}
+    \item Si el cliente no tiene historial suficiente, se detiene con mensaje explicito.
+    \item Si no hay candidatos (cliente ya vio todo), se informa y no se genera ranking vacio silencioso.
+    \item Si el denominador de ponderacion es cero, el score se define en cero para evitar errores numericos.
+\end{itemize}
+
+\paragraph{Comparacion de algoritmos y criterio de uso}
+\begin{itemize}
+    \item \textbf{Coseno usuario-usuario:} util cuando hay patrones fuertes entre clientes comparables.
+    \item \textbf{Slope One:} util para entornos con necesidad de explicabilidad simple y comportamiento relativamente estable.
+    \item \textbf{Item-Item:} util cuando se busca respuesta rapida y recomendaciones basadas en similitud de catalogo.
+\end{itemize}
+
+Para evaluacion academica, se recomienda comparar los 3 algoritmos con el mismo cliente y mismo \texttt{n\_recomendaciones}, revisando diferencias en top items y coherencia de motivos.
+
+\paragraph{Salida y explicabilidad}
+Independientemente del algoritmo, se devuelve un ranking con:
+\begin{itemize}
+    \item \texttt{pelicula\_titulo}, \texttt{categoria\_nombre}, \texttt{score\_final}
+    \item \texttt{motivo} y \texttt{motivo\_detalle}
+\end{itemize}
+Esto mantiene comparables los resultados entre metodos.
+
+\subsubsection{Como funciona la interfaz del sistema}
 La vista \texttt{vistas/interfaz\_recomendacion.py} conecta usuario y motor de recomendacion.
 
 \paragraph{Flujo de uso}
@@ -344,6 +406,7 @@ La vista \texttt{vistas/interfaz\_recomendacion.py} conecta usuario y motor de r
     \item Carga inicial desde MongoDB.
     \item Seleccion de cliente en \texttt{Combobox}.
     \item Definicion de numero de recomendaciones y vecinos.
+    \item Seleccion del algoritmo: Coseno, Slope One o Item-Item.
     \item Ejecucion de \texttt{recomendar\_peliculas()}.
     \item Visualizacion en tabla (pelicula, categoria, score, motivo principal).
     \item Panel inferior con detalle matematico de la recomendacion seleccionada.
@@ -357,21 +420,21 @@ La vista \texttt{vistas/interfaz\_recomendacion.py} conecta usuario y motor de r
     \item \textbf{Exportacion CSV}: persistencia externa de recomendaciones.
 \end{itemize}
 
-\subsubsection{6) Visualizacion de clusters}
+\subsubsection{Visualizacion de clusters}
 La descripcion puntual de cada grafico se presenta junto a su imagen correspondiente en la seccion de evidencia grafica, para facilitar la lectura directa de cada resultado.
 
-\subsubsection{7) Integracion end-to-end del sistema}
+\subsubsection{Integracion end-to-end del sistema}
 El sistema opera con una trazabilidad clara:
 \begin{enumerate}
     \item ETL integra y limpia Excel.
     \item Se genera JSON y se actualiza MongoDB.
     \item Desde Mongo se construyen DataFrames analiticos.
     \item Con perfil de clientes se ejecuta KMeans.
-    \item El recomendador combina colaborativo + contenido + contexto + cluster.
+    \item El recomendador ejecuta uno de 3 algoritmos (Coseno, Slope One, Item-Item) segun seleccion de usuario.
     \item Interfaz y graficos exponen resultados con explicabilidad.
 \end{enumerate}
 
-\subsubsection{8) Robustez y controles incluidos}
+\subsubsection{Robustez y controles incluidos}
 Se incorporaron validaciones para mantener estabilidad:
 \begin{itemize}
     \item validacion de hojas requeridas en origen,
@@ -382,8 +445,7 @@ Se incorporaron validaciones para mantener estabilidad:
     \item mensajes de error orientados a diagnostico.
 \end{itemize}
 
-\subsubsection{9) Fragmentos de implementacion clave (codigo real)}
-Como el evaluador puede no tener acceso al repositorio, se incluyen fragmentos centrales de la implementacion para respaldar tecnicamente el informe.
+\subsubsection{Fragmentos de implementacion clave (codigo real)}
 
 \paragraph{ETL: eliminacion de IDs tecnicos y persistencia dual}
 \begin{lstlisting}
@@ -595,7 +657,7 @@ El desarrollo se ejecuto de manera incremental, validando cada capa antes de ava
 \begin{itemize}
     \item Se construyo matriz cliente-pelicula para similitud colaborativa.
     \item Se incorporaron senales de contenido y contexto temporal para reducir recomendaciones triviales.
-    \item Se incluyo ajuste por cluster para alinear recomendaciones al perfil de segmento.
+    \item Se desarrollo un motor de recomendacion con 3 algoritmos seleccionables y comparables sobre el mismo historial.
 \end{itemize}
 
 \subsubsection{Fase 4: Explicabilidad y visualizacion}
@@ -611,7 +673,7 @@ El desarrollo se ejecuto de manera incremental, validando cada capa antes de ava
     \item \textbf{ETL:} enriquecimiento y persistencia en JSON + MongoDB.
     \item \textbf{Analitica base:} calculo de DataFrames agregados desde MongoDB.
     \item \textbf{Segmentacion:} agrupacion de clientes mediante KMeans.
-    \item \textbf{Recomendacion:} ranking hibrido con score ponderado.
+    \item \textbf{Recomendacion:} ranking generado por uno de los 3 algoritmos seleccionados por el usuario.
     \item \textbf{Presentacion:} interfaz Tkinter y graficos de interpretacion.
 \end{enumerate}
 
@@ -626,7 +688,7 @@ El desarrollo se ejecuto de manera incremental, validando cada capa antes de ava
 \subsection{Resultados obtenidos}
 \begin{itemize}
     \item Pipeline completo funcional: Excel $\rightarrow$ JSON/MongoDB $\rightarrow$ Clusters $\rightarrow$ Recomendaciones.
-    \item Segmentacion estable y reusable para analisis y para mejorar el score del recomendador.
+    \item Segmentacion estable y reusable para analisis de clientes y apoyo a la interpretacion de perfiles.
     \item Recomendaciones explicables, con trazabilidad de cada componente del score.
     \item Interfaz mejorada en legibilidad de motivos y detalle de calculo.
     \item Graficos de cluster reetiquetados para usuarios sin perfil tecnico.
@@ -679,7 +741,7 @@ En esta seccion se dejan espacios para insertar capturas reales de la ejecucion 
 
 \begin{itemize}
     \item Se logro una solucion BI integral, coherente y mantenible al separar responsabilidades entre modulos de logica y vistas.
-    \item El uso de KMeans sobre perfiles de cliente aporta valor tanto analitico como operativo dentro del sistema de recomendacion.
+    \item El uso de KMeans sobre perfiles de cliente aporta valor analitico para segmentacion e interpretacion de clientes.
     \item La explicabilidad del score final mejora la confianza en las recomendaciones y facilita su validacion por parte de usuarios de negocio.
     \item El ajuste de etiquetas y textos en visualizaciones fue clave para que la interpretacion no dependa de conocimientos tecnicos de programacion o modelado.
 \end{itemize}
