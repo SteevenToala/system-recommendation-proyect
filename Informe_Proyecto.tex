@@ -114,7 +114,7 @@ Desarrollar un flujo integral de analitica de datos para alquiler de peliculas q
 \end{itemize}
 
 \subsection{Introduccion}
-El proyecto implementa una arquitectura por capas para resolver un caso de negocio de recomendacion sobre datos de alquiler. Primero se construye un proceso ETL que toma \texttt{BI-FINAL.xlsx}, integra dimensiones (cliente, pelicula, categoria, tiempo, tienda, ciudad y actores) y publica un fact enriquecido en JSON y MongoDB. Como parte de la limpieza, se eliminan IDs tecnicos de la salida analitica para trabajar con referencias legibles.
+El proyecto implementa una arquitectura por capas para resolver un caso de negocio de recomendacion sobre datos de alquiler de peliculas de la base de datos Sakila. Primero se construye un proceso ETL que toma \texttt{BI-FINAL.xlsx}, integra dimensiones (cliente, pelicula, categoria, tiempo, tienda, ciudad y actores) y publica un fact enriquecido en JSON y MongoDB. Como parte de la limpieza, se excluyen los IDs tecnicos de la salida persistida para trabajar con referencias legibles en reportes e interfaz, manteniendo la posibilidad de usar claves tecnicas solo como respaldo cuando existan en origen.
 
 Sobre esta base se generan DataFrames agregados desde MongoDB: resumen de peliculas, resumen de categorias y perfil de clientes. Estos artefactos alimentan dos componentes clave:
 \begin{itemize}
@@ -134,7 +134,7 @@ En la interfaz Tkinter, el usuario selecciona cliente, define parametros (recome
 \subsection{Desarrollo tecnico detallado del sistema}
 
 \subsubsection{Proceso ETL completo: desde Excel hasta JSON y MongoDB}
-El flujo inicia en \texttt{logica/carga\_datos.py} con el archivo \texttt{BI-FINAL.xlsx}. Este modulo tiene como objetivo transformar una estructura transaccional con IDs tecnicos en un fact enriquecido, legible y listo para analitica.
+El flujo inicia en \texttt{logica/carga\_datos.py} con el archivo \texttt{BI-FINAL.xlsx}. Este modulo tiene como objetivo transformar una estructura transaccional con IDs tecnicos en un fact enriquecido, legible y listo para analitica; al final, la version publicada en JSON y MongoDB se guarda sin columnas \texttt{id\_*}.
 
 \paragraph{Paso 1: lectura de hojas y control de existencia}
 Se utiliza \texttt{pd.ExcelFile} para leer una sola vez el libro y luego extraer cada hoja requerida con la funcion \texttt{cargar\_hoja}. Si una hoja obligatoria no existe, el proceso se detiene con error explicito.
@@ -169,7 +169,7 @@ La agregacion usa \texttt{groupby('id\_pelicula')} para concentrar la informacio
 Se crea \texttt{cliente\_nombre\_completo} concatenando nombre y apellido, para evitar depender de IDs internos en reportes e interfaz.
 
 \paragraph{Paso 6: salida final y persistencia}
-Antes de guardar, se eliminan columnas que inician con \texttt{id\_}. El resultado se persiste en:
+Antes de guardar, se eliminan columnas que inician con \texttt{id\_} en la version exportada. El resultado se persiste en:
 \begin{itemize}
     \item JSON: \texttt{fact\_alquiler\_proyecto.json}.
     \item MongoDB: \texttt{BI\_Final.fact\_alquiler}.
