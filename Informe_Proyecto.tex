@@ -21,7 +21,28 @@
 \usepackage{adjustbox}
 \usepackage{graphicx}   % Para imagenes
 \usepackage{caption}    % Para captionof sin figure flotante
+\usepackage{listings}
+\usepackage{xcolor}
 \usepackage[spanish]{babel} % Si quieres que "Figura" salga en espanol
+
+\lstdefinestyle{pythonstyle}{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    breakatwhitespace=false,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    frame=single,
+    framerule=0.3pt,
+    tabsize=4,
+    xleftmargin=2mm,
+    xrightmargin=2mm,
+    keywordstyle=\color{blue!60!black},
+    commentstyle=\color{green!40!black},
+    stringstyle=\color{red!50!black}
+}
+\lstset{style=pythonstyle}
 
 \newcommand{\checkedbox}{\stackinset{c}{0pt}{c}{0pt}{\checkmark}{$\square$}}
 \newcommand{\espacioimagen}[2]{%
@@ -67,7 +88,8 @@
     \textbf{Tema:} & Sistema BI de segmentacion KMeans y recomendacion hibrida \\
     \textbf{Unidad de Organizacion Curricular:} & Profesional. \\
     \textbf{Nivel y Paralelo:} & 6to - A \\
-    \textbf{Alumnos participantes:} & Toala Camacho Steeven Santiago. \\
+    \textbf{Alumnos participantes:} & Toala Steeven \\
+    &Lopez Alexis\\
     \textbf{Asignatura:} & Inteligencia de Negocios \\
     \textbf{Docente:} & Mg. Ing. Ruben Nogales. \\
 \end{tabular}
@@ -117,15 +139,440 @@ Con la implementacion actual:
 
 En la interfaz Tkinter, el usuario puede seleccionar cliente, generar recomendaciones, visualizar motivo principal y revisar el detalle matematico del score por pelicula. En paralelo, la vista de clusters entrega graficos en ventanas separadas con descripciones para facilitar interpretacion.
 
-\subsection{Desarrollo tecnico (resumen de implementacion)}
+\subsection{Desarrollo tecnico detallado del sistema}
+
+\subsubsection{1) Proceso ETL completo: desde Excel hasta JSON y MongoDB}
+El flujo inicia en \texttt{logica/carga\_datos.py} con el archivo \texttt{BI-FINAL.xlsx}. Este modulo tiene como objetivo transformar una estructura transaccional con IDs tecnicos en un fact enriquecido, legible y listo para analitica.
+
+\paragraph{Paso 1: lectura de hojas y control de existencia}
+Se utiliza \texttt{pd.ExcelFile} para leer una sola vez el libro y luego extraer cada hoja requerida con la funcion \texttt{cargar\_hoja}. Si una hoja obligatoria no existe, el proceso se detiene con error explicito.
+
+\begin{lstlisting}
+if nombre_hoja not in excel.sheet_names:
+    raise ValueError(f'No existe la hoja requerida: {nombre_hoja}')
+\end{lstlisting}
+
+\paragraph{Paso 2: limpieza tipologica del fact}
+En \texttt{preparar\_fact} se convierten a numerico columnas de medida y claves (\texttt{ingreso}, \texttt{duracion\_alquiler}, \texttt{id\_*}) usando \texttt{errors='coerce'} para capturar inconsistencias sin romper el flujo.
+Posteriormente se filtran registros sin \texttt{ingreso}, porque el sistema de recomendacion y los agregados dependen de este campo.
+
+\paragraph{Paso 3: enriquecimiento dimensional}
+Con una secuencia de \texttt{merge} por llave, el fact incorpora atributos descriptivos:
 \begin{itemize}
-    \item \textbf{Carga y enriquecimiento:} lectura de hojas, conversion de tipos, joins dimensionales, armado de \texttt{cliente\_nombre\_completo}, consolidacion de actores y persistencia en MongoDB.
-    \item \textbf{DataFrames agregados:} calculo de metricas de peliculas (popularidad, ingreso, duracion), categorias (ingreso y volumen) y clientes (actividad, gasto, variedad).
-    \item \textbf{KMeans:} estandarizacion con \texttt{StandardScaler}, entrenamiento con \texttt{random\_state=42}, y etiquetado interpretable de segmentos (Mayor gasto, Gasto medio, Menor gasto).
-    \item \textbf{Recomendacion:} calculo de vecinos por similitud coseno, construccion de candidatos no vistos, evaluacion de senales y ranking por score final.
-    \item \textbf{Explicabilidad:} generacion de texto de motivo y bloque de desglose numerico de aportes por componente.
-    \item \textbf{Visualizacion:} graficos de tamano de segmento, similitud de clientes en 2D, perfil comparativo y mapa de calor con lenguaje orientado a usuario final.
+    \item Cliente: nombre, apellido, email, estado activo.
+    \item Pelicula: titulo, duracion, clasificacion, idioma, precio.
+    \item Categoria, ciudad, tiempo y tienda.
 \end{itemize}
+Esto convierte datos orientados a almacenamiento en datos orientados a analisis y explicacion de negocio.
+
+\paragraph{Paso 4: consolidacion de actores por pelicula}
+Con la tabla puente \texttt{PUENTE\_PELICULA\_ACTOR} y \texttt{DIM\_ACTOR} se construyen:
+\begin{itemize}
+    \item \texttt{pelicula\_actores}: lista de actores unicos por pelicula.
+    \item \texttt{cantidad\_actores}: total de actores unicos.
+\end{itemize}
+La agregacion usa \texttt{groupby('id\_pelicula')} para concentrar la informacion en un solo registro por pelicula.
+
+\paragraph{Paso 5: identificador legible de cliente}
+Se crea \texttt{cliente\_nombre\_completo} concatenando nombre y apellido, para evitar depender de IDs internos en reportes e interfaz.
+
+\paragraph{Paso 6: salida final y persistencia}
+Antes de guardar, se eliminan columnas que inician con \texttt{id\_}. El resultado se persiste en:
+\begin{itemize}
+    \item JSON: \texttt{fact\_alquiler\_proyecto.json}.
+    \item MongoDB: \texttt{BI\_Final.fact\_alquiler}.
+\end{itemize}
+Se ejecuta \texttt{collection.drop()} para evitar duplicados entre corridas y garantizar consistencia de una carga completa por ejecucion.
+
+\subsubsection{2) Como se construyen y para que sirven los DataFrames}
+La capa \texttt{logica/dataframes.py} construye DataFrames agregados desde MongoDB para separar calculo analitico de la capa de interfaz.
+
+\paragraph{DataFrame 1: \texttt{df\_resumen\_peliculas}}
+Se agrupa por \texttt{pelicula\_titulo} y se calculan:
+\begin{itemize}
+    \item \texttt{total\_alquileres}: cuantas veces se alquilo.
+    \item \texttt{ingreso\_promedio} y \texttt{ingreso\_total}: rentabilidad.
+    \item \texttt{clientes\_unicos}: alcance real de audiencia.
+    \item \texttt{duracion\_promedio}: comportamiento temporal del alquiler.
+\end{itemize}
+\textbf{Por que se usa:} es la tabla base para rankear candidatos en recomendacion, porque contiene popularidad, valor economico y comportamiento de consumo.
+
+\paragraph{DataFrame 2: \texttt{df\_resumen\_categorias}}
+Se agrupa por \texttt{categoria\_nombre} y se obtiene volumen, clientes e ingresos.
+\textbf{Por que se usa:} permite medir fuerza global de categoria y evitar que una recomendacion dependa solo de similitud cliente-cliente.
+
+\paragraph{DataFrame 3: \texttt{df\_perfil\_clientes}}
+Se agrupa por \texttt{cliente\_ref} y se calcula:
+\begin{itemize}
+    \item \texttt{total\_alquileres} (actividad),
+    \item \texttt{peliculas\_unicas} y \texttt{categorias\_unicas} (variedad),
+    \item \texttt{gasto\_total} y \texttt{gasto\_promedio} (capacidad de gasto).
+\end{itemize}
+\textbf{Por que se usa:} es el vector de comportamiento que alimenta KMeans y tambien componentes del recomendador.
+
+\paragraph{Normalizaciones aplicadas}
+Para combinar metricas con escalas distintas se usa:
+\[
+\hat{x}=\frac{x-\min(x)}{\max(x)-\min(x)}
+\]
+Si \(\max(x)=\min(x)\), la serie se reemplaza por ceros para evitar division por cero.
+
+En categorias se define un score combinado:
+\[
+\text{score\_categoria\_global}=0.6\cdot\text{popularidad\_categoria\_norm}+0.4\cdot\text{ingreso\_categoria\_norm}
+\]
+
+\subsubsection{3) Algoritmo de clusters: como se obtienen exactamente}
+La segmentacion esta en \texttt{logica/clusters.py} y usa KMeans sobre \texttt{df\_perfil\_clientes}.
+
+\paragraph{Variables de entrada al modelo}
+\begin{itemize}
+    \item \texttt{gasto\_promedio}
+    \item \texttt{total\_alquileres}
+    \item \texttt{peliculas\_unicas}
+    \item \texttt{categorias\_unicas}
+\end{itemize}
+
+\paragraph{Pipeline del clustering}
+\begin{enumerate}
+    \item Conversion de columnas a numerico y eliminacion de filas invalidas.
+    \item Estandarizacion con \texttt{StandardScaler} para que ninguna variable domine por escala.
+    \item Definicion de \(k\) robusta: \texttt{k = min(n\_clusters, numero\_clientes\_validos)}.
+    \item Entrenamiento de \texttt{KMeans(random\_state=42, n\_init=10)}.
+    \item Etiquetado semantico de clusters por gasto promedio del centroide.
+\end{enumerate}
+
+\paragraph{Interpretacion de etiquetas}
+Los clusters no se dejan como numeros tecnicos. Se renombran como:
+\begin{itemize}
+    \item \texttt{Mayor gasto}
+    \item \texttt{Gasto medio}
+    \item \texttt{Menor gasto}
+\end{itemize}
+segun el orden descendente del centro de \texttt{gasto\_promedio}.
+
+\paragraph{Salida final de segmentacion}
+Cada cliente queda con:
+\texttt{cliente\_ref}, \texttt{cluster\_id}, \texttt{cluster\_nombre}, \texttt{cluster\_gasto\_centro}.
+Esta salida se integra al recomendador y tambien se exporta en \texttt{clusters\_fact\_alquiler\_proyecto.csv}.
+
+Fragmento representativo del codigo aplicado:
+\begin{lstlisting}
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(base[columnas_modelo].fillna(0.0))
+
+kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+base['cluster_id'] = kmeans.fit_predict(X_scaled)
+\end{lstlisting}
+
+\subsubsection{4) Algoritmo del sistema de recomendacion: desglose completo}
+El modulo \texttt{logica/recomendacion.py} implementa un recomendador hibrido de 11 senales.
+
+\paragraph{Etapa A: preparacion y matrices base}
+\begin{itemize}
+    \item Se construye \texttt{cliente\_ref} y \texttt{pelicula\_ref} en formato legible.
+    \item Se arma matriz cliente-pelicula por conteo de alquileres.
+    \item Se separan peliculas vistas y candidatas no vistas.
+\end{itemize}
+
+\paragraph{Etapa B: similitud colaborativa}
+Se calcula similitud coseno cliente-cliente:
+\[
+\cos(\theta)=\frac{u\cdot v}{\|u\|\,\|v\|}
+\]
+Con los \texttt{n\_vecinos} mas similares se estima una preferencia ponderada por pelicula candidata.
+
+\paragraph{Etapa C: senales de contenido y contexto}
+Para cada candidato se calculan:
+\begin{itemize}
+    \item \texttt{score\_categoria}: afinidad del cliente con la categoria.
+    \item \texttt{score\_categoria\_global}: fortaleza global de la categoria.
+    \item \texttt{score\_popularidad}, \texttt{score\_ingreso}, \texttt{score\_duracion} desde resumen de peliculas.
+    \item \texttt{score\_ajuste\_cliente}: cercania entre ingreso promedio de pelicula y gasto promedio del cliente.
+    \item \texttt{score\_temporal}: similitud entre patron mensual del cliente y patron mensual de la pelicula.
+    \item \texttt{score\_diversidad}: incentivo a categorias menos consumidas por ese cliente.
+\end{itemize}
+
+\paragraph{Etapa D: senales de cluster}
+Usando la segmentacion KMeans:
+\begin{itemize}
+    \item \texttt{score\_cluster\_ajuste}: cercania entre ingreso de pelicula y centro economico del cluster.
+    \item \texttt{score\_cluster\_categoria}: frecuencia de la categoria dentro del mismo cluster del cliente.
+\end{itemize}
+
+\paragraph{Etapa E: score final y ranking}
+El ranking se obtiene por suma ponderada:
+\begin{align*}
+\text{score\_final}=
+&\;0.30\,s_{colaborativo}+0.16\,s_{categoria}+0.11\,s_{popularidad}+0.07\,s_{ingreso} \\
+&+0.05\,s_{duracion}+0.08\,s_{categoria\_global}+0.07\,s_{ajuste\_cliente} \\
+&+0.04\,s_{temporal}+0.02\,s_{diversidad}+0.06\,s_{cluster\_ajuste}+0.04\,s_{cluster\_categoria}
+\end{align*}
+
+Fragmento representativo del codigo aplicado:
+\begin{lstlisting}
+candidatos['score_final'] = (
+    candidatos['score_colaborativo'] * 0.30
+    + candidatos['score_categoria'] * 0.16
+    + candidatos['score_popularidad'] * 0.11
+    + candidatos['score_ingreso'] * 0.07
+    + candidatos['score_duracion'] * 0.05
+    + candidatos['score_categoria_global'] * 0.08
+    + candidatos['score_ajuste_cliente'] * 0.07
+    + candidatos['score_temporal'] * 0.04
+    + candidatos['score_diversidad'] * 0.02
+    + candidatos['score_cluster_ajuste'] * 0.06
+    + candidatos['score_cluster_categoria'] * 0.04
+)
+\end{lstlisting}
+
+Luego se ordena de mayor a menor \texttt{score\_final} y se devuelven las \texttt{n\_recomendaciones} top.
+
+\paragraph{Etapa F: explicabilidad}
+Cada fila recomendada incorpora:
+\begin{itemize}
+    \item \texttt{motivo}: explicacion corta para lectura rapida.
+    \item \texttt{motivo\_detalle}: desglose numerico tipo \texttt{valor x peso = aporte} por cada senal.
+\end{itemize}
+Esto permite auditar el por que de cada resultado.
+
+\subsubsection{5) Como funciona la interfaz del sistema}
+La vista \texttt{vistas/interfaz\_recomendacion.py} conecta usuario y motor de recomendacion.
+
+\paragraph{Flujo de uso}
+\begin{enumerate}
+    \item Carga inicial desde MongoDB.
+    \item Seleccion de cliente en \texttt{Combobox}.
+    \item Definicion de numero de recomendaciones y vecinos.
+    \item Ejecucion de \texttt{recomendar\_peliculas()}.
+    \item Visualizacion en tabla (pelicula, categoria, score, motivo principal).
+    \item Panel inferior con detalle matematico de la recomendacion seleccionada.
+\end{enumerate}
+
+\paragraph{Elementos de salida para el usuario}
+\begin{itemize}
+    \item \textbf{Resumen del cliente}: algoritmo, segmento, historico, vecino mas similar, categorias preferidas.
+    \item \textbf{Tabla principal}: resultado compacto para decision rapida.
+    \item \textbf{Detalle de score}: trazabilidad completa de aportes.
+    \item \textbf{Exportacion CSV}: persistencia externa de recomendaciones.
+\end{itemize}
+
+\subsubsection{6) Visualizacion de clusters}
+La descripcion puntual de cada grafico se presenta junto a su imagen correspondiente en la seccion de evidencia grafica, para facilitar la lectura directa de cada resultado.
+
+\subsubsection{7) Integracion end-to-end del sistema}
+El sistema opera con una trazabilidad clara:
+\begin{enumerate}
+    \item ETL integra y limpia Excel.
+    \item Se genera JSON y se actualiza MongoDB.
+    \item Desde Mongo se construyen DataFrames analiticos.
+    \item Con perfil de clientes se ejecuta KMeans.
+    \item El recomendador combina colaborativo + contenido + contexto + cluster.
+    \item Interfaz y graficos exponen resultados con explicabilidad.
+\end{enumerate}
+
+\subsubsection{8) Robustez y controles incluidos}
+Se incorporaron validaciones para mantener estabilidad:
+\begin{itemize}
+    \item validacion de hojas requeridas en origen,
+    \item conversion segura de tipos con \texttt{errors='coerce'},
+    \item manejo de dataset vacio en cada capa,
+    \item proteccion ante division por cero en normalizaciones,
+    \item fallback de identificadores legibles cuando faltan columnas tecnicas,
+    \item mensajes de error orientados a diagnostico.
+\end{itemize}
+
+\subsubsection{9) Fragmentos de implementacion clave (codigo real)}
+Como el evaluador puede no tener acceso al repositorio, se incluyen fragmentos centrales de la implementacion para respaldar tecnicamente el informe.
+
+\paragraph{ETL: eliminacion de IDs tecnicos y persistencia dual}
+\begin{lstlisting}
+def guardar_json_y_mongo(df: pd.DataFrame) -> None:
+    columnas_sin_ids = [
+        col for col in df.columns
+        if not col.lower().startswith('id_')
+    ]
+    df_salida = df[columnas_sin_ids]
+    registros = df_salida.to_dict(orient='records')
+
+    with open(RUTA_JSON, 'w', encoding='utf-8') as archivo:
+        json.dump(registros, archivo, ensure_ascii=False, indent=4)
+
+    client = MongoClient(MONGO_URI)
+    db = client[DB_NAME]
+    collection = db[COLLECTION_NAME]
+    collection.drop()
+    if registros:
+        collection.insert_many(registros)
+\end{lstlisting}
+
+\paragraph{Carga inicial desde Excel y validacion de hojas requeridas}
+\begin{lstlisting}
+def cargar_hoja(excel: pd.ExcelFile, nombre_hoja: str) -> pd.DataFrame:
+    if nombre_hoja not in excel.sheet_names:
+        raise ValueError(f'No existe la hoja requerida: {nombre_hoja}')
+    return excel.parse(nombre_hoja)
+
+
+def leer_tablas() -> dict:
+    excel = pd.ExcelFile(RUTA_EXCEL)
+    tablas = {
+        'fact': cargar_hoja(excel, 'FACT_ALQUILER'),
+        'actor': cargar_hoja(excel, 'DIM_ACTOR'),
+        'categoria': cargar_hoja(excel, 'DIM_CATEGORIA'),
+        'ciudad': cargar_hoja(excel, 'DIM_CIUDAD'),
+        'cliente': cargar_hoja(excel, 'DIM_CLIENTE'),
+        'pelicula': cargar_hoja(excel, 'DIM_PELICULA'),
+        'tiempo': cargar_hoja(excel, 'DIM_TIEMPO'),
+        'tienda': cargar_hoja(excel, 'DIM_TIENDA'),
+        'puente': cargar_hoja(excel, 'PUENTE_PELICULA_ACTOR'),
+    }
+    return tablas
+\end{lstlisting}
+
+\paragraph{Limpieza de campos numericos en la carga del fact}
+\begin{lstlisting}
+def preparar_fact(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    columnas_numericas = [
+        'id_hecho', 'id_tiempo', 'id_cliente', 'id_pelicula',
+        'id_tienda', 'id_categoria', 'id_ciudad',
+        'cantidad_alquiler', 'ingreso', 'duracion_alquiler'
+    ]
+    for columna in columnas_numericas:
+        if columna in df.columns:
+            df[columna] = pd.to_numeric(df[columna], errors='coerce')
+
+    df = df.dropna(subset=['ingreso'])
+    return df
+\end{lstlisting}
+
+\paragraph{Carga de datos para el recomendador desde MongoDB}
+\begin{lstlisting}
+def cargar_datos_mongo() -> pd.DataFrame:
+    client = MongoClient(MONGO_URI)
+    db = client[DB_NAME]
+    collection = db[COLLECTION_NAME]
+    df = pd.DataFrame(list(collection.find({}, {'_id': 0})))
+    if df.empty:
+        raise ValueError('No hay datos cargados en MongoDB para recomendar.')
+    return df
+
+
+def preparar_datos(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df['ingreso'] = pd.to_numeric(df['ingreso'], errors='coerce')
+
+    if 'cliente_nombre_completo' in df.columns:
+        df['cliente_ref'] = df['cliente_nombre_completo'].astype(str).str.strip()
+    if 'pelicula_titulo' in df.columns:
+        df['pelicula_ref'] = df['pelicula_titulo'].astype(str).str.strip()
+
+    df = df.dropna(subset=['cliente_ref', 'pelicula_ref', 'ingreso'])
+    return df
+\end{lstlisting}
+
+\paragraph{Agregacion en MongoDB para peliculas}
+\begin{lstlisting}
+resultado_2 = list(fact_alquiler.aggregate([
+    {'$group': {
+        '_id': '$pelicula_titulo',
+        'pelicula_titulo': {'$first': '$pelicula_titulo'},
+        'categoria_nombre': {'$first': '$categoria_nombre'},
+        'total_alquileres': {'$sum': 1},
+        'ingreso_promedio': {'$avg': '$ingreso'},
+        'ingreso_total': {'$sum': '$ingreso'},
+        'clientes_unicos': {
+            '$addToSet': {
+                '$ifNull': [
+                    '$cliente_nombre_completo',
+                    '$cliente_nombre'
+                ]
+            }
+        }
+    }},
+    {'$project': {
+        '_id': 0,
+        'pelicula_ref': '$pelicula_titulo',
+        'pelicula_titulo': '$pelicula_titulo',
+        'categoria_nombre': {'$ifNull': ['$categoria_nombre', 'Sin categoria']},
+        'total_alquileres': 1,
+        'ingreso_promedio': 1,
+        'ingreso_total': 1,
+        'clientes_unicos': {'$size': '$clientes_unicos'}
+    }}
+]))
+\end{lstlisting}
+
+\paragraph{Construccion de matriz cliente-pelicula}
+\begin{lstlisting}
+def construir_matriz_clientes_peliculas(df: pd.DataFrame) -> pd.DataFrame:
+    return pd.pivot_table(
+        df,
+        index='cliente_ref',
+        columns='pelicula_ref',
+        values='ingreso',
+        aggfunc='count',
+        fill_value=0,
+    )
+\end{lstlisting}
+
+\paragraph{Similitud coseno cliente-cliente}
+\begin{lstlisting}
+def calcular_similitud_coseno(matriz: pd.DataFrame, cliente_id: str) -> pd.Series:
+    vector_objetivo = matriz.loc[cliente_id].to_numpy(dtype=float)
+    norma_objetivo = np.linalg.norm(vector_objetivo)
+    similitudes = {}
+
+    for otro_cliente, fila in matriz.iterrows():
+        if otro_cliente == cliente_id:
+            continue
+        vector_otro = fila.to_numpy(dtype=float)
+        norma_otro = np.linalg.norm(vector_otro)
+        if norma_objetivo > 0 and norma_otro > 0:
+            similitud = float(
+                np.dot(vector_objetivo, vector_otro)
+                / (norma_objetivo * norma_otro)
+            )
+            if similitud > 0:
+                similitudes[str(otro_cliente)] = similitud
+
+    return pd.Series(similitudes).sort_values(ascending=False)
+\end{lstlisting}
+
+\paragraph{Motivo detallado y trazabilidad del score}
+\begin{lstlisting}
+def construir_motivo_detallado(fila: pd.Series) -> str:
+    factores = [
+        ('Colaborativo (clientes similares)', 'score_colaborativo', 0.30),
+        ('Afinidad por categoria', 'score_categoria', 0.16),
+        ('Popularidad de la pelicula', 'score_popularidad', 0.11),
+        ('Ingreso promedio de la pelicula', 'score_ingreso', 0.07),
+        ('Duracion promedio', 'score_duracion', 0.05),
+    ]
+    lineas = ['Calculo del score final (suma ponderada):']
+    for nombre, col, peso in factores:
+        valor = float(fila.get(col, 0.0))
+        aporte = valor * peso
+        lineas.append(f"- {nombre}: {valor:.4f} x {peso:.2f} = {aporte:.4f}")
+    return '\\n'.join(lineas)
+\end{lstlisting}
+
+\paragraph{Interfaz: carga de resultados en tabla}
+\begin{lstlisting}
+for idx, fila in recomendaciones.reset_index(drop=True).iterrows():
+    self.tree.insert(
+        '',
+        tk.END,
+        iid=str(idx),
+        values=(
+            fila.get('pelicula_titulo', ''),
+            fila.get('categoria_nombre', ''),
+            f"{float(fila.get('score_final', 0.0)):.4f}",
+            self._resumir_motivo(fila.get('motivo', '')),
+        ),
+    )
+\end{lstlisting}
 
 \subsection{Metodologia aplicada}
 El desarrollo se ejecuto de manera incremental, validando cada capa antes de avanzar a la siguiente para evitar errores acumulados.
@@ -194,11 +641,15 @@ En esta seccion se dejan espacios para insertar capturas reales de la ejecucion 
     \caption{Distribucion de clientes por segmento}
 \end{figure}
 
+\textbf{Descripcion:} Este grafico muestra el tamano relativo de cada cluster. La altura de cada barra representa la cantidad de clientes del segmento y permite identificar que grupos son predominantes y en cuales conviene priorizar estrategias comerciales.
+
 \begin{figure}[H]
     \centering
     \espacioimagen{imagenes/graficosimilitudclientes.png}{grafico de similitud de comportamiento de clientes}
     \caption{Mapa de similitud de comportamiento de clientes}
 \end{figure}
+
+\textbf{Descripcion:} Esta visualizacion proyecta a los clientes en 2 dimensiones mediante PCA usando variables de actividad, gasto y variedad. Cada punto representa un cliente; puntos cercanos indican comportamientos similares. El tamano del punto esta asociado a \texttt{gasto\_promedio}.
 
 \begin{figure}[H]
     \centering
@@ -206,17 +657,23 @@ En esta seccion se dejan espacios para insertar capturas reales de la ejecucion 
     \caption{Comparacion de perfil por segmento}
 \end{figure}
 
+\textbf{Descripcion:} Este grafico compara el perfil medio de cada segmento en escala normalizada \([0,1]\): nivel de gasto, nivel de actividad, variedad de peliculas y variedad de categorias. Permite observar rapidamente fortalezas relativas de cada cluster sin sesgo por diferencias de escala.
+
 \begin{figure}[H]
     \centering
     \espacioimagen{imagenes/grafico_resumen_segmento.png}{mapa de calor de resumen por segmento}
     \caption{Resumen rapido por segmento}
 \end{figure}
 
+\textbf{Descripcion:} El mapa de calor resume por segmento la cantidad de clientes, el gasto promedio y la actividad promedio en valores normalizados. Los colores mas intensos representan niveles mas altos y facilitan comparar el peso comercial de cada cluster en una sola vista.
+
 \begin{figure}[H]
     \centering
     \espacioimagen{imagenes/interfaz_recomendacion.png}{captura de la interfaz de recomendacion}
     \caption{Interfaz de recomendacion con detalle de score}
 \end{figure}
+
+\textbf{Descripcion:} Este grafico muestra la interfaz del sistema de recomendacion con seleccion de cliente, tabla de peliculas recomendadas y panel de detalle explicativo. En ese panel se desglosa el \texttt{score\_final} por componentes, lo que permite interpretar por que una pelicula fue priorizada.
 
 \subsection{Conclusiones}
 
