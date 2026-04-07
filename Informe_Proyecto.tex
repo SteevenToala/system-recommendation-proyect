@@ -394,7 +394,8 @@ Para evaluacion academica, se recomienda comparar los 3 algoritmos con el mismo 
 Independientemente del algoritmo, se devuelve un ranking con:
 \begin{itemize}
     \item \texttt{pelicula\_titulo}, \texttt{categoria\_nombre}, \texttt{score\_final}
-    \item \texttt{motivo} y \texttt{motivo\_detalle}
+    \item \texttt{motivo}: resumen breve, humano y sin nombre del algoritmo.
+    \item \texttt{motivo\_detalle}: evidencia concreta que explica por que se recomienda cada titulo.
 \end{itemize}
 Esto mantiene comparables los resultados entre metodos.
 
@@ -407,8 +408,8 @@ La vista \texttt{vistas/interfaz\_recomendacion.py} conecta usuario y motor de r
     \item Seleccion de cliente en \texttt{Combobox}.
     \item Definicion de numero de recomendaciones y vecinos.
     \item Seleccion del algoritmo: Coseno, Slope One o Item-Item.
-    \item Ejecucion de \texttt{recomendar\_peliculas()}.
-    \item Visualizacion en tabla (pelicula, categoria, score, motivo principal).
+    \item Ejecucion de \texttt{recomendar\_peliculas()}. y resumen breve del motivo
+    \item Visualizacion en tabla (pelicula, categoria, score y motivo breve).
     \item Panel inferior con detalle matematico de la recomendacion seleccionada.
 \end{enumerate}
 
@@ -602,21 +603,19 @@ def calcular_similitud_coseno(matriz: pd.DataFrame, cliente_id: str) -> pd.Serie
     return pd.Series(similitudes).sort_values(ascending=False)
 \end{lstlisting}
 
-\paragraph{Motivo detallado y trazabilidad del score}
+\paragraph{Detalle de la recomendacion y trazabilidad del score}
 \begin{lstlisting}
-def construir_motivo_detallado(fila: pd.Series) -> str:
-    factores = [
-        ('Colaborativo (clientes similares)', 'score_colaborativo', 0.30),
-        ('Afinidad por categoria', 'score_categoria', 0.16),
-        ('Popularidad de la pelicula', 'score_popularidad', 0.11),
-        ('Ingreso promedio de la pelicula', 'score_ingreso', 0.07),
-        ('Duracion promedio', 'score_duracion', 0.05),
+def construir_motivo_detallado(fila: pd.Series, lineas_extra=None) -> str:
+    lineas = [
+        f"Pelicula: {fila.get('pelicula_titulo', '')}",
+        f"Categoria: {fila.get('categoria_nombre', '')}",
+        f"Score final: {float(fila.get('score_final', 0.0)):.4f}",
+        f"Total de alquileres: {int(float(fila.get('total_alquileres', 0.0)))}",
+        f"Ingreso promedio: {float(fila.get('ingreso_promedio', 0.0)):.2f}",
     ]
-    lineas = ['Calculo del score final (suma ponderada):']
-    for nombre, col, peso in factores:
-        valor = float(fila.get(col, 0.0))
-        aporte = valor * peso
-        lineas.append(f"- {nombre}: {valor:.4f} x {peso:.2f} = {aporte:.4f}")
+    if lineas_extra:
+        lineas.append('')
+        lineas.extend([str(linea) for linea in lineas_extra if str(linea).strip()])
     return '\\n'.join(lineas)
 \end{lstlisting}
 
@@ -662,7 +661,7 @@ El desarrollo se ejecuto de manera incremental, validando cada capa antes de ava
 
 \subsubsection{Fase 4: Explicabilidad y visualizacion}
 \begin{itemize}
-    \item Se implemento motivo principal y desglose de aportes por componente del score.
+    \item Se implemento un motivo principal breve y un detalle explicativo adaptado a cada algoritmo de recomendacion.
     \item Se mejoraron textos y etiquetas de graficos para usuarios no tecnicos.
     \item Se separaron visualizaciones por ventana para facilitar lectura y comparacion.
 \end{itemize}

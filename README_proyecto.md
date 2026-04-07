@@ -51,9 +51,13 @@ El modelo usa los DataFrames de soporte realmente necesarios construidos desde M
 - matriz cliente-categoria normalizada (afinidad)
 - perfiles temporales por mes (cliente y pelicula, cuando existe `tiempo_mes`)
 
-Con esos DataFrames calcula un score hibrido que combina similitud colaborativa, afinidad de categoria, popularidad, ajuste al perfil del cliente, senal temporal y un pequeno factor de diversidad.
+El sistema de recomendacion ofrece tres opciones seleccionables desde la interfaz:
 
-El algoritmo se declara explicitamente dentro de la funcion de recomendacion: hibrido (similitud coseno cliente-cliente + senales de contenido + ajuste por cluster KMeans).
+- similitud de coseno entre clientes
+- Slope One basado en desviaciones entre pares de peliculas
+- item-item basado en similitud entre peliculas vistas y candidatas
+
+Cada algoritmo devuelve un motivo principal breve y un detalle explicativo con la evidencia usada para esa recomendacion.
 
 ## DataFrames desde Mongo (estilo Sakila)
 

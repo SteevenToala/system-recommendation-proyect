@@ -264,55 +264,43 @@ def construir_preferencias_categoria(df: pd.DataFrame, cliente_id: str) -> pd.Se
     return historial['categoria_nombre'].astype(str).value_counts(normalize=True).sort_values(ascending=False)
 
 
-def construir_motivo(fila: pd.Series, categorias_preferidas: pd.Series) -> str:
-    motivos = []
-    if float(fila.get('score_colaborativo', 0.0)) >= 0.55:
-        motivos.append('A clientes con gustos similares tambien les gusta esta pelicula')
-    if float(fila.get('score_categoria', 0.0)) >= 0.40:
-        motivos.append('Coincide con tus categorias preferidas')
-    if float(fila.get('score_cluster_categoria', 0.0)) >= 0.45:
-        motivos.append('Es frecuente en clientes de tu mismo segmento')
-    if float(fila.get('score_temporal', 0.0)) >= 0.40:
-        motivos.append('Encaja con tu patron de consumo por periodo')
-    if float(fila.get('score_popularidad', 0.0)) >= 0.60:
-        motivos.append('Tiene buena aceptacion general en el historial')
+def construir_motivo(fila: pd.Series, categorias_preferidas: pd.Series | None = None) -> str:
+    score = float(fila.get('score_final', 0.0))
+    categoria = str(fila.get('categoria_nombre', '')).strip()
 
-    if not motivos:
-        categoria = str(fila.get('categoria_nombre', ''))
-        if categoria and categoria in categorias_preferidas.index:
-            return f'Recomendacion balanceada: mantiene afinidad con la categoria {categoria}'
-        return 'Recomendacion balanceada por similitud, perfil y variedad'
+    if score >= 0.80:
+        base = 'Muy alineada con tu perfil'
+    elif score >= 0.60:
+        base = 'Buena coincidencia con tus gustos'
+    elif score >= 0.40:
+        base = 'Coincidencia moderada con tu perfil'
+    else:
+        base = 'Afinidad parcial con tu perfil'
 
-    return motivos[0]
+    if categoria and categorias_preferidas is not None and categoria in categorias_preferidas.index:
+        return f'{base} en {categoria}'
+    if categoria:
+        return f'{base} para {categoria}'
+    return base
 
 
-def construir_motivo_detallado(fila: pd.Series) -> str:
-    factores = [
-        ('Colaborativo (clientes similares)', 'score_colaborativo', 0.30),
-        ('Afinidad por categoria', 'score_categoria', 0.16),
-        ('Popularidad de la pelicula', 'score_popularidad', 0.11),
-        ('Ingreso promedio de la pelicula', 'score_ingreso', 0.07),
-        ('Duracion promedio', 'score_duracion', 0.05),
-        ('Fuerza global de la categoria', 'score_categoria_global', 0.08),
-        ('Ajuste al perfil de gasto del cliente', 'score_ajuste_cliente', 0.07),
-        ('Ajuste temporal por mes', 'score_temporal', 0.04),
-        ('Diversidad', 'score_diversidad', 0.02),
-        ('Ajuste por centro del cluster KMeans', 'score_cluster_ajuste', 0.06),
-        ('Afinidad de categoria dentro del cluster', 'score_cluster_categoria', 0.04),
+def construir_motivo_detallado(fila: pd.Series, lineas_extra=None) -> str:
+    lineas = [
+        f"Pelicula: {fila.get('pelicula_titulo', '')}",
+        f"Categoria: {fila.get('categoria_nombre', '')}",
+        f"Score final: {float(fila.get('score_final', 0.0)):.4f}",
+        f"Total de alquileres: {int(float(fila.get('total_alquileres', 0.0)))}",
+        f"Ingreso promedio: {float(fila.get('ingreso_promedio', 0.0)):.2f}",
     ]
 
-    lineas = ['Calculo del score final (suma ponderada):']
-    suma_aportes = 0.0
-    for nombre, col, peso in factores:
-        valor = float(fila.get(col, 0.0))
-        aporte = valor * peso
-        suma_aportes += aporte
-        lineas.append(f"- {nombre}: {valor:.4f} x {peso:.2f} = {aporte:.4f}")
+    duracion = fila.get('duracion_promedio', np.nan)
+    if pd.notna(duracion):
+        lineas.append(f"Duracion promedio: {float(duracion):.2f}")
 
-    score_final = float(fila.get('score_final', suma_aportes))
-    lineas.append('')
-    lineas.append(f'Suma de aportes: {suma_aportes:.4f}')
-    lineas.append(f'Score final mostrado: {score_final:.4f}')
+    if lineas_extra:
+        lineas.append('')
+        lineas.extend([str(linea) for linea in lineas_extra if str(linea).strip()])
+
     return '\n'.join(lineas)
 
 
@@ -338,11 +326,22 @@ def _armar_salida_basica(
     score: pd.Series,
     motivo_texto: str,
     n_recomendaciones: int,
+    motivo_builder=None,
+    detalle_por_pelicula=None,
 ) -> pd.DataFrame:
     candidatos = candidatos.copy()
     candidatos['score_final'] = normalizar_serie(score).fillna(0.0)
-    candidatos['motivo'] = motivo_texto
-    candidatos['motivo_detalle'] = motivo_texto
+
+    if motivo_builder is not None:
+        candidatos['motivo'] = candidatos.apply(motivo_builder, axis=1)
+    else:
+        candidatos['motivo'] = motivo_texto
+
+    if detalle_por_pelicula is not None:
+        referencias = candidatos['pelicula_ref'].astype(str)
+        candidatos['motivo_detalle'] = referencias.map(detalle_por_pelicula).fillna(candidatos['motivo'])
+    else:
+        candidatos['motivo_detalle'] = candidatos['motivo']
 
     columnas_base = ['pelicula_titulo', 'categoria_nombre', 'total_alquileres', 'ingreso_promedio', 'duracion_promedio']
     for col in columnas_base:
@@ -367,26 +366,59 @@ def _recomendar_coseno_usuario(
     candidatos, categorias_preferidas, historial_cliente, _ = _base_candidatos(df, cliente_id, dataframes_modelo)
     matriz_fill = matriz_val.fillna(0.0)
     vecinos = calcular_similitud_coseno(matriz_fill, cliente_id).head(n_vecinos)
+    vecinos_positivos = vecinos[vecinos > 0]
+    similitud_media_vecinos = float(vecinos_positivos.mean()) if not vecinos_positivos.empty else 0.0
 
     score = pd.Series(0.0, index=candidatos.index)
+    datos_para_detalle = {}
+    
     if not vecinos.empty:
         denominador = float(np.abs(vecinos.values).sum())
         if denominador > 0:
             for idx, pelicula_ref in candidatos['pelicula_ref'].astype(str).items():
                 total = 0.0
                 peso_total = 0.0
+                valoraciones_vecinos = []
+                vecinos_usados = 0
                 for vecino_id, sim in vecinos.items():
                     rating = float(matriz_val.loc[vecino_id, pelicula_ref]) if pelicula_ref in matriz_val.columns else np.nan
-                    if pd.notna(rating):
+                    if pd.notna(rating) and float(sim) > 0:
                         total += float(sim) * rating
                         peso_total += abs(float(sim))
+                        valoraciones_vecinos.append(float(rating))
+                        vecinos_usados += 1
                 score.loc[idx] = (total / peso_total) if peso_total > 0 else 0.0
+                datos_para_detalle[pelicula_ref] = (vecinos_usados, valoraciones_vecinos)
+
+    score_normalizado = normalizar_serie(score).fillna(0.0)
+    
+    detalle_por_pelicula = {}
+    
+    for idx, pelicula_ref in candidatos['pelicula_ref'].astype(str).items():
+        fila = candidatos.loc[idx].copy()
+        fila['score_final'] = float(score_normalizado.loc[idx])
+        if pelicula_ref in datos_para_detalle:
+            vecinos_usados, valoraciones_vecinos = datos_para_detalle[pelicula_ref]
+            lineas_extra = [
+                'Algoritmo: similitud entre clientes con patrones de consumo parecidos.',
+                f'Clientes parecidos que aportaron al score: {vecinos_usados}',
+                f'Similitud media de los clientes usados: {similitud_media_vecinos:.3f}',
+                (
+                    f'Valoracion media observada en esos clientes: {float(np.mean(valoraciones_vecinos)):.2f}'
+                    if valoraciones_vecinos
+                    else 'Valoracion media observada en esos clientes: 0.00'
+                ),
+                'La pelicula sube de posicion cuando clientes similares la valoran bien.',
+            ]
+            detalle_por_pelicula[pelicula_ref] = construir_motivo_detallado(fila, lineas_extra)
 
     recomendaciones = _armar_salida_basica(
         candidatos,
-        score,
-        motivo_texto='Similitud de coseno: usuarios parecidos consumieron esta pelicula',
+        score_normalizado,
+        motivo_texto='Coincide con tu perfil de consumo',
         n_recomendaciones=n_recomendaciones,
+        motivo_builder=construir_motivo,
+        detalle_por_pelicula=detalle_por_pelicula,
     )
 
     contexto = {
@@ -418,6 +450,16 @@ def _recomendar_item_item(
     if not items_vistos:
         raise ValueError('El cliente no tiene historial suficiente para item-item.')
 
+    titulo_por_item = {}
+    if 'pelicula_titulo' in historial_cliente.columns:
+        titulo_por_item = (
+            historial_cliente.dropna(subset=['pelicula_ref'])
+            .drop_duplicates('pelicula_ref')
+            .set_index('pelicula_ref')['pelicula_titulo']
+            .astype(str)
+            .to_dict()
+        )
+
     matriz_items = matriz_fill.T
     items_disponibles = set(matriz_items.index.astype(str).tolist())
     items_vistos = [it for it in items_vistos if it in items_disponibles]
@@ -439,6 +481,7 @@ def _recomendar_item_item(
     user_seen_ratings = usuario_ratings.loc[items_vistos].to_numpy(dtype=float)
     k = max(1, min(int(n_vecinos), sim_matrix.shape[1]))
     score_por_candidato = {}
+    detalle_por_pelicula = {}
     for row_idx, item_candidato in enumerate(candidatos_refs):
         sims = sim_matrix[row_idx]
         if sims.size == 0:
@@ -451,6 +494,7 @@ def _recomendar_item_item(
         if not np.any(mask):
             score_por_candidato[item_candidato] = 0.0
             continue
+        top_idx = top_idx[mask]
         top_sims = top_sims[mask]
         top_ratings = top_ratings[mask]
         numerador = float(np.dot(top_sims, top_ratings))
@@ -458,12 +502,47 @@ def _recomendar_item_item(
         score_por_candidato[item_candidato] = (numerador / denominador) if denominador > 0 else 0.0
 
     score = candidatos['pelicula_ref'].astype(str).map(score_por_candidato).fillna(0.0)
+    score_normalizado = normalizar_serie(score).fillna(0.0)
+    
+    detalle_por_pelicula = {}
+    for row_idx, item_candidato in enumerate(candidatos_refs):
+        fila = candidatos.iloc[row_idx].copy()
+        fila['score_final'] = float(score_normalizado.iloc[row_idx])
+        
+        sims = sim_matrix[row_idx]
+        if sims.size > 0:
+            top_idx_local = np.argpartition(sims, -k)[-k:]
+            top_sims = sims[top_idx_local]
+            top_ratings = user_seen_ratings[top_idx_local]
+            mask = top_sims > 0
+            if np.any(mask):
+                top_idx_local = top_idx_local[mask]
+                top_sims = top_sims[mask]
+                top_ratings = top_ratings[mask]
+                
+                referencias_apoyo = sorted(
+                    zip(top_idx_local.tolist(), top_sims.tolist(), top_ratings.tolist()),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )[:3]
+                lineas_extra = [
+                    'Algoritmo: similitud entre peliculas ya vistas y peliculas candidatas.',
+                    f'Peliculas de referencia usadas: {len(referencias_apoyo)}',
+                ]
+                for idx_ref, sim, rating in referencias_apoyo:
+                    ref = items_vistos[int(idx_ref)]
+                    titulo_ref = titulo_por_item.get(ref, ref)
+                    lineas_extra.append(f'- {titulo_ref}: similitud {float(sim):.3f}, valoracion {float(rating):.2f}')
+                lineas_extra.append('La pelicula gana peso cuando se parece a varias de tus vistas mejor valoradas.')
+                detalle_por_pelicula[item_candidato] = construir_motivo_detallado(fila, lineas_extra)
 
     recomendaciones = _armar_salida_basica(
         candidatos,
-        score,
-        motivo_texto='Item-item: similar a peliculas que este cliente ya consumio',
+        score_normalizado,
+        motivo_texto='Se parece a peliculas que ya consumiste',
         n_recomendaciones=n_recomendaciones,
+        motivo_builder=construir_motivo,
+        detalle_por_pelicula=detalle_por_pelicula,
     )
 
     contexto = {
@@ -493,6 +572,16 @@ def _recomendar_slope_one(
     if rated_items.empty:
         raise ValueError('El cliente no tiene historial suficiente para Slope One.')
 
+    titulo_por_item = {}
+    if 'pelicula_titulo' in historial_cliente.columns:
+        titulo_por_item = (
+            historial_cliente.dropna(subset=['pelicula_ref'])
+            .drop_duplicates('pelicula_ref')
+            .set_index('pelicula_ref')['pelicula_titulo']
+            .astype(str)
+            .to_dict()
+        )
+
     dev = {}
     freq = {}
     for _, fila in matriz_val.iterrows():
@@ -515,9 +604,12 @@ def _recomendar_slope_one(
                 dev[item_i][item_j] /= float(freq[item_i][item_j])
 
     score = pd.Series(0.0, index=candidatos.index)
+    datos_para_detalle = {}
+    
     for idx, item_candidato in candidatos['pelicula_ref'].astype(str).items():
         numerador = 0.0
         denominador = 0.0
+        evidencias = []
         if item_candidato not in dev:
             continue
         for item_visto, rating_visto in rated_items.items():
@@ -525,15 +617,46 @@ def _recomendar_slope_one(
                 continue
             if item_visto in dev[item_candidato] and item_visto in freq[item_candidato]:
                 f = float(freq[item_candidato][item_visto])
-                numerador += (dev[item_candidato][item_visto] + float(rating_visto)) * f
+                desviacion = float(dev[item_candidato][item_visto])
+                estimado = desviacion + float(rating_visto)
+                numerador += estimado * f
                 denominador += f
+                evidencias.append((item_visto, float(rating_visto), desviacion, f, estimado))
         score.loc[idx] = (numerador / denominador) if denominador > 0 else 0.0
+        datos_para_detalle[item_candidato] = evidencias
+
+    score_normalizado = normalizar_serie(score).fillna(0.0)
+    
+    detalle_por_pelicula = {}
+    
+    for idx, item_candidato in candidatos['pelicula_ref'].astype(str).items():
+        fila = candidatos.loc[idx].copy()
+        fila['score_final'] = float(score_normalizado.loc[idx])
+        
+        if item_candidato in datos_para_detalle and len(datos_para_detalle[item_candidato]) > 0:
+            evidencias = datos_para_detalle[item_candidato]
+            evidencias_ordenadas = sorted(evidencias, key=lambda x: x[3], reverse=True)[:3]
+            lineas_extra = [
+                'Algoritmo: desviaciones promedio entre peliculas valoradas.',
+                f'Pares comparados con tu historial: {len(evidencias)}',
+            ]
+            for item_visto, rating_visto, desviacion, frecuencia, estimado in evidencias_ordenadas:
+                titulo_ref = titulo_por_item.get(item_visto, item_visto)
+                lineas_extra.append(
+                    f'- {titulo_ref}: tu valoracion {rating_visto:.2f}, desviacion media {desviacion:+.3f}, frecuencia {int(frecuencia)}'
+                )
+            lineas_extra.append('La prediccion mejora cuando varios pares historicos apuntan a una valoracion similar.')
+            detalle_por_pelicula[item_candidato] = construir_motivo_detallado(fila, lineas_extra)
+        else:
+            continue
 
     recomendaciones = _armar_salida_basica(
         candidatos,
-        score,
-        motivo_texto='Slope One: prediccion por desviaciones promedio entre pares de items',
+        score_normalizado,
+        motivo_texto='Encaja con tu historial de valoraciones',
         n_recomendaciones=n_recomendaciones,
+        motivo_builder=construir_motivo,
+        detalle_por_pelicula=detalle_por_pelicula,
     )
 
     contexto = {
@@ -555,10 +678,10 @@ def recomendar_peliculas(
     algoritmo: str = 'coseno',
 ):
     """
-    Algoritmo usado: recomendador hibrido.
-    - Filtrado colaborativo basado en vecinos (similitud coseno cliente-cliente).
-    - Senales basadas en contenido (categoria, popularidad, ingreso, duracion, temporalidad).
-    - Ajuste de segmento con clusters KMeans de clientes.
+    Selector de algoritmos de recomendacion.
+    - Similitud de coseno entre clientes.
+    - Slope One basado en desviaciones entre pares de peliculas.
+    - Item-item basado en similitud entre peliculas vistas y candidatas.
     """
     if dataframes_modelo is None:
         dataframes_modelo = construir_dataframes_modelo(df)

@@ -259,7 +259,7 @@ class AppRecomendacion:
             'Motivo principal:',
             f"- {fila.get('motivo', '')}",
             '',
-            'Explicacion del calculo del score:',
+            'Detalle de la recomendacion:',
             f"{str(fila.get('motivo_detalle', '')).replace(' | ', '\\n- ')}",
         ]
         self.txt_detalle.delete('1.0', tk.END)
