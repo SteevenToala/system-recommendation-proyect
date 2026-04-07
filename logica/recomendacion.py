@@ -8,7 +8,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from logica.dataframes import construir_clusters_clientes, construir_dataframes_desde_mongo
+from logica.clusters import construir_clusters_clientes
+from logica.dataframes import construir_dataframes_desde_mongo
 
 
 MONGO_URI = 'mongodb://localhost:27017/'
@@ -203,11 +204,11 @@ def construir_dataframes_modelo(df: pd.DataFrame):
         'cliente_mes_norm': construir_df_cliente_mes_norm(df),
         'pelicula_mes_norm': construir_df_pelicula_mes_norm(df),
     }
-    dataframes_base['clusters_clientes'] = construir_clusters_clientes(dataframes_base['clientes'], n_clusters=3)
 
     try:
         dfs_mongo = construir_dataframes_desde_mongo(top_n=10)
     except Exception:
+        dataframes_base['clusters_clientes'] = construir_clusters_clientes(dataframes_base['clientes'], n_clusters=3)
         return dataframes_base
 
     if isinstance(dfs_mongo, dict):
@@ -217,8 +218,8 @@ def construir_dataframes_modelo(df: pd.DataFrame):
             dataframes_base['peliculas'] = dfs_mongo['df_resumen_peliculas'].copy()
         if 'df_resumen_categorias' in dfs_mongo and not dfs_mongo['df_resumen_categorias'].empty:
             dataframes_base['categorias'] = dfs_mongo['df_resumen_categorias'].copy()
-        if 'df_clusters_clientes' in dfs_mongo and not dfs_mongo['df_clusters_clientes'].empty:
-            dataframes_base['clusters_clientes'] = dfs_mongo['df_clusters_clientes'].copy()
+
+    dataframes_base['clusters_clientes'] = construir_clusters_clientes(dataframes_base['clientes'], n_clusters=3)
 
     return dataframes_base
 
@@ -255,21 +256,54 @@ def construir_preferencias_categoria(df: pd.DataFrame, cliente_id: str) -> pd.Se
 
 def construir_motivo(fila: pd.Series, categorias_preferidas: pd.Series) -> str:
     motivos = []
-    if fila['score_colaborativo'] >= 0.6:
-        motivos.append('coincide con clientes parecidos')
-    if fila['score_categoria'] >= 0.6:
-        motivos.append('encaja con tus categorias preferidas')
-    if fila['score_popularidad'] >= 0.6:
-        motivos.append('es una pelicula popular en el historial')
-    if fila['score_ingreso'] >= 0.6:
-        motivos.append('tiene buen ingreso promedio')
+    if float(fila.get('score_colaborativo', 0.0)) >= 0.55:
+        motivos.append('A clientes con gustos similares tambien les gusta esta pelicula')
+    if float(fila.get('score_categoria', 0.0)) >= 0.40:
+        motivos.append('Coincide con tus categorias preferidas')
+    if float(fila.get('score_cluster_categoria', 0.0)) >= 0.45:
+        motivos.append('Es frecuente en clientes de tu mismo segmento')
+    if float(fila.get('score_temporal', 0.0)) >= 0.40:
+        motivos.append('Encaja con tu patron de consumo por periodo')
+    if float(fila.get('score_popularidad', 0.0)) >= 0.60:
+        motivos.append('Tiene buena aceptacion general en el historial')
+
     if not motivos:
         categoria = str(fila.get('categoria_nombre', ''))
         if categoria and categoria in categorias_preferidas.index:
-            motivos.append(f'pertenece a la categoria {categoria} que ya consumes')
-        else:
-            motivos.append('equilibrio entre popularidad y perfil del cliente')
-    return '; '.join(motivos)
+            return f'Recomendacion balanceada: mantiene afinidad con la categoria {categoria}'
+        return 'Recomendacion balanceada por similitud, perfil y variedad'
+
+    return motivos[0]
+
+
+def construir_motivo_detallado(fila: pd.Series) -> str:
+    factores = [
+        ('Colaborativo (clientes similares)', 'score_colaborativo', 0.30),
+        ('Afinidad por categoria', 'score_categoria', 0.16),
+        ('Popularidad de la pelicula', 'score_popularidad', 0.11),
+        ('Ingreso promedio de la pelicula', 'score_ingreso', 0.07),
+        ('Duracion promedio', 'score_duracion', 0.05),
+        ('Fuerza global de la categoria', 'score_categoria_global', 0.08),
+        ('Ajuste al perfil de gasto del cliente', 'score_ajuste_cliente', 0.07),
+        ('Ajuste temporal por mes', 'score_temporal', 0.04),
+        ('Diversidad', 'score_diversidad', 0.02),
+        ('Ajuste por centro del cluster KMeans', 'score_cluster_ajuste', 0.06),
+        ('Afinidad de categoria dentro del cluster', 'score_cluster_categoria', 0.04),
+    ]
+
+    lineas = ['Calculo del score final (suma ponderada):']
+    suma_aportes = 0.0
+    for nombre, col, peso in factores:
+        valor = float(fila.get(col, 0.0))
+        aporte = valor * peso
+        suma_aportes += aporte
+        lineas.append(f"- {nombre}: {valor:.4f} x {peso:.2f} = {aporte:.4f}")
+
+    score_final = float(fila.get('score_final', suma_aportes))
+    lineas.append('')
+    lineas.append(f'Suma de aportes: {suma_aportes:.4f}')
+    lineas.append(f'Score final mostrado: {score_final:.4f}')
+    return '\n'.join(lineas)
 
 
 def recomendar_peliculas(
@@ -279,6 +313,12 @@ def recomendar_peliculas(
     n_vecinos: int = 20,
     dataframes_modelo=None,
 ):
+    """
+    Algoritmo usado: recomendador hibrido.
+    - Filtrado colaborativo basado en vecinos (similitud coseno cliente-cliente).
+    - Senales basadas en contenido (categoria, popularidad, ingreso, duracion, temporalidad).
+    - Ajuste de segmento con clusters KMeans de clientes.
+    """
     matriz = construir_matriz_clientes_peliculas(df)
     if cliente_id not in matriz.index:
         raise ValueError(f'No existe historial para el cliente {cliente_id}.')
@@ -411,13 +451,14 @@ def recomendar_peliculas(
     )
 
     candidatos['motivo'] = candidatos.apply(lambda fila: construir_motivo(fila, categorias_preferidas), axis=1)
+    candidatos['motivo_detalle'] = candidatos.apply(construir_motivo_detallado, axis=1)
 
     columnas_salida = [
         'pelicula_titulo', 'categoria_nombre', 'total_alquileres',
         'ingreso_promedio', 'duracion_promedio', 'score_colaborativo', 'score_categoria',
         'score_popularidad', 'score_ingreso', 'score_duracion', 'score_categoria_global',
         'score_ajuste_cliente', 'score_temporal', 'score_diversidad',
-        'score_cluster_ajuste', 'score_cluster_categoria', 'score_final', 'motivo'
+        'score_cluster_ajuste', 'score_cluster_categoria', 'score_final', 'motivo', 'motivo_detalle'
     ]
     recomendaciones = candidatos[columnas_salida].sort_values('score_final', ascending=False).head(n_recomendaciones).reset_index(drop=True)
 
@@ -441,6 +482,7 @@ def recomendar_peliculas(
         vecino_similar_mostrar = nombre_vecino if nombre_vecino else vecino_ref
 
     contexto = {
+        'algoritmo': 'Hibrido: similitud coseno + contenido + ajuste por cluster KMeans',
         'cliente_mostrar': cliente_nombre_mostrar,
         'historico_total': int(len(historial_cliente)),
         'peliculas_unicas_vistas': int(historial_cliente['pelicula_ref'].nunique()),
@@ -471,6 +513,7 @@ def main() -> None:
     )
 
     print('=== SISTEMA DE RECOMENDACION - LOGICA ===')
+    print(f"Algoritmo: {contexto.get('algoritmo', 'N/A')}")
     print(f"Cliente: {contexto.get('cliente_mostrar', cliente_id)}")
     print(f"Segmento: {contexto.get('segmento_cliente', 'N/A')}")
     print(recomendaciones[['pelicula_titulo', 'categoria_nombre', 'score_final']].head(10).to_string(index=False))

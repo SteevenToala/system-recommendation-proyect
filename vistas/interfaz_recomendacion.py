@@ -2,6 +2,7 @@ import os
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from tkinter.scrolledtext import ScrolledText
 from pathlib import Path
 
 import pandas as pd
@@ -22,7 +23,9 @@ class AppRecomendacion:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title('Sistema de Recomendacion BI Final')
-        self.root.geometry('1100x700')
+        self.root.geometry('1360x860')
+        self.root.minsize(1180, 760)
+        self.root.state('zoomed')
 
         self.df = None
         self.dataframes_modelo = None
@@ -70,20 +73,20 @@ class AppRecomendacion:
         self.txt_contexto.pack(fill=tk.X)
 
         frame_tabla = ttk.LabelFrame(self.root, text='Recomendaciones', padding=10)
-        frame_tabla.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        frame_tabla.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 6))
 
         columnas = ('pelicula_titulo', 'categoria_nombre', 'score_final', 'motivo')
-        self.tree = ttk.Treeview(frame_tabla, columns=columnas, show='headings', height=20)
+        self.tree = ttk.Treeview(frame_tabla, columns=columnas, show='headings', height=14)
 
         self.tree.heading('pelicula_titulo', text='Pelicula')
         self.tree.heading('categoria_nombre', text='Categoria')
         self.tree.heading('score_final', text='Score')
-        self.tree.heading('motivo', text='Motivo')
+        self.tree.heading('motivo', text='Motivo principal')
 
-        self.tree.column('pelicula_titulo', width=270, anchor='w')
-        self.tree.column('categoria_nombre', width=120, anchor='w')
-        self.tree.column('score_final', width=80, anchor='center')
-        self.tree.column('motivo', width=540, anchor='w')
+        self.tree.column('pelicula_titulo', width=300, anchor='w')
+        self.tree.column('categoria_nombre', width=130, anchor='w')
+        self.tree.column('score_final', width=95, anchor='center')
+        self.tree.column('motivo', width=560, anchor='w')
 
         scrollbar_y = ttk.Scrollbar(frame_tabla, orient='vertical', command=self.tree.yview)
         scrollbar_x = ttk.Scrollbar(frame_tabla, orient='horizontal', command=self.tree.xview)
@@ -92,6 +95,15 @@ class AppRecomendacion:
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
         scrollbar_x.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.tree.bind('<<TreeviewSelect>>', self._mostrar_detalle_recomendacion)
+
+        frame_detalle = ttk.LabelFrame(self.root, text='Detalle de la recomendacion seleccionada', padding=10)
+        frame_detalle.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+
+        self.txt_detalle = ScrolledText(frame_detalle, height=14, wrap='word', font=('Segoe UI', 10))
+        self.txt_detalle.pack(fill=tk.BOTH, expand=True)
+        self.txt_detalle.insert('1.0', 'Selecciona una recomendacion para ver una explicacion mas clara.')
 
     def _cargar_datos_iniciales(self):
         try:
@@ -130,6 +142,12 @@ class AppRecomendacion:
         for item in self.tree.get_children():
             self.tree.delete(item)
 
+    def _resumir_motivo(self, texto: str, max_chars: int = 95) -> str:
+        txt = str(texto or '').strip()
+        if len(txt) <= max_chars:
+            return txt
+        return txt[: max_chars - 3].rstrip() + '...'
+
     def _obtener_cliente_seleccionado(self):
         etiqueta = self.combo_clientes.get().strip()
         if not etiqueta:
@@ -162,19 +180,22 @@ class AppRecomendacion:
             self.recomendaciones_actuales = recomendaciones.copy()
             self._limpiar_tabla()
 
-            for _, fila in recomendaciones.iterrows():
+            for idx, fila in recomendaciones.reset_index(drop=True).iterrows():
                 self.tree.insert(
                     '',
                     tk.END,
+                    iid=str(idx),
                     values=(
                         fila.get('pelicula_titulo', ''),
                         fila.get('categoria_nombre', ''),
                         f"{float(fila.get('score_final', 0.0)):.4f}",
-                        fila.get('motivo', ''),
+                        self._resumir_motivo(fila.get('motivo', '')),
                     ),
                 )
 
             self._mostrar_contexto(contexto)
+            self.txt_detalle.delete('1.0', tk.END)
+            self.txt_detalle.insert('1.0', 'Selecciona una recomendacion para ver por que aparece en tu lista.')
             self.lbl_estado.config(text=f"Recomendaciones generadas para {contexto.get('cliente_mostrar', 'cliente seleccionado')}.")
 
         except Exception as exc:
@@ -183,6 +204,7 @@ class AppRecomendacion:
 
     def _mostrar_contexto(self, contexto):
         lineas = [
+            f"Algoritmo: {contexto.get('algoritmo', '')}",
             f"Cliente: {contexto.get('cliente_mostrar', '')}",
             f"Registros historicos: {contexto.get('historico_total', '')}",
             f"Peliculas unicas vistas: {contexto.get('peliculas_unicas_vistas', '')}",
@@ -204,6 +226,30 @@ class AppRecomendacion:
 
         self.txt_contexto.delete('1.0', tk.END)
         self.txt_contexto.insert(tk.END, '\n'.join(lineas))
+
+    def _mostrar_detalle_recomendacion(self, _event=None):
+        seleccion = self.tree.selection()
+        if not seleccion or self.recomendaciones_actuales.empty:
+            return
+
+        idx = int(seleccion[0])
+        if idx < 0 or idx >= len(self.recomendaciones_actuales):
+            return
+
+        fila = self.recomendaciones_actuales.iloc[idx]
+        lineas = [
+            f"Pelicula: {fila.get('pelicula_titulo', '')}",
+            f"Categoria: {fila.get('categoria_nombre', '')}",
+            f"Score final: {float(fila.get('score_final', 0.0)):.4f}",
+            '',
+            'Motivo principal:',
+            f"- {fila.get('motivo', '')}",
+            '',
+            'Explicacion del calculo del score:',
+            f"{str(fila.get('motivo_detalle', '')).replace(' | ', '\\n- ')}",
+        ]
+        self.txt_detalle.delete('1.0', tk.END)
+        self.txt_detalle.insert('1.0', '\n'.join(lineas))
 
     def exportar_csv(self):
         if self.recomendaciones_actuales.empty:

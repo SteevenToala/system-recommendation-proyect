@@ -3,8 +3,6 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 from pymongo import MongoClient
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
 
 
 MONGO_URI = 'mongodb://localhost:27017/'
@@ -28,69 +26,10 @@ def convertir_a_dataframe(data):
     return pd.json_normalize(data, sep='_')
 
 
-def construir_clusters_clientes(df_perfil_clientes: pd.DataFrame, n_clusters: int = 3) -> pd.DataFrame:
-    if df_perfil_clientes.empty:
-        return pd.DataFrame(columns=['cliente_ref', 'cluster_id', 'cluster_nombre', 'cluster_gasto_centro'])
-
-    base = df_perfil_clientes.copy()
-    columnas_modelo = [
-        col for col in ['gasto_promedio', 'total_alquileres', 'peliculas_unicas', 'categorias_unicas']
-        if col in base.columns
-    ]
-    if not columnas_modelo:
-        return pd.DataFrame(columns=['cliente_ref', 'cluster_id', 'cluster_nombre', 'cluster_gasto_centro'])
-
-    for col in columnas_modelo:
-        base[col] = pd.to_numeric(base[col], errors='coerce')
-    base = base.dropna(subset=columnas_modelo)
-    if base.empty:
-        return pd.DataFrame(columns=['cliente_ref', 'cluster_id', 'cluster_nombre', 'cluster_gasto_centro'])
-
-    k = max(1, min(int(n_clusters), len(base)))
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(base[columnas_modelo].fillna(0.0))
-
-    if k == 1:
-        base['cluster_id'] = 0
-        base['cluster_nombre'] = 'Perfil unico'
-        base['cluster_gasto_centro'] = float(base['gasto_promedio'].mean()) if 'gasto_promedio' in base.columns else 0.0
-        return base[['cliente_ref', 'cluster_id', 'cluster_nombre', 'cluster_gasto_centro']]
-
-    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-    base['cluster_id'] = kmeans.fit_predict(X_scaled)
-
-    centros_gasto = base.groupby('cluster_id')['gasto_promedio'].mean().sort_values(ascending=False)
-    nombres_ordenados = ['Mayor gasto', 'Gasto medio', 'Menor gasto']
-    mapa_nombres = {
-        cluster_id: nombres_ordenados[idx] if idx < len(nombres_ordenados) else f'Cluster {idx + 1}'
-        for idx, cluster_id in enumerate(centros_gasto.index.tolist())
-    }
-
-    base['cluster_nombre'] = base['cluster_id'].map(mapa_nombres)
-    base['cluster_gasto_centro'] = base['cluster_id'].map(centros_gasto.to_dict()).astype(float)
-
-    return base[['cliente_ref', 'cluster_id', 'cluster_nombre', 'cluster_gasto_centro']]
-
-
 def construir_dataframes_desde_mongo(top_n: int = 10) -> Dict[str, pd.DataFrame]:
     client = MongoClient(MONGO_URI)
     db = client[DB_NAME]
     fact_alquiler = db[COLLECTION_NAME]
-
-    resultado_1 = list(fact_alquiler.aggregate([
-        {'$match': {'ingreso': {'$ne': None}}},
-        {'$sort': {'ingreso': -1}},
-        {'$limit': int(top_n)},
-        {'$project': {
-            '_id': 0,
-            'cliente_ref': {'$ifNull': ['$cliente_nombre_completo', '$cliente_nombre']},
-            'pelicula_ref': '$pelicula_titulo',
-            'categoria_nombre': '$categoria_nombre',
-            'ingreso': '$ingreso',
-            'duracion_alquiler': '$duracion_alquiler',
-            'tiempo_mes': '$tiempo_mes',
-        }}
-    ]))
 
     resultado_2 = list(fact_alquiler.aggregate([
         {'$group': {
@@ -159,72 +98,43 @@ def construir_dataframes_desde_mongo(top_n: int = 10) -> Dict[str, pd.DataFrame]
         {'$sort': {'gasto_total': -1}},
     ]))
 
-    resultado_5 = list(fact_alquiler.aggregate([
-        {'$match': {'tiempo_mes': {'$ne': None}}},
-        {'$group': {
-            '_id': {
-                'tiempo_mes': '$tiempo_mes',
-                'categoria_nombre': '$categoria_nombre',
-            },
-            'total_alquileres': {'$sum': 1},
-            'ingreso_total': {'$sum': '$ingreso'},
-        }},
-        {'$project': {
-            '_id': 0,
-            'tiempo_mes': '$_id.tiempo_mes',
-            'categoria_nombre': {'$ifNull': ['$_id.categoria_nombre', 'Sin categoria']},
-            'total_alquileres': 1,
-            'ingreso_total': 1,
-        }},
-        {'$sort': {'tiempo_mes': 1, 'ingreso_total': -1}},
-    ]))
 
-    resultado_1_df = convertir_a_dataframe(resultado_1)
-    resultado_2_df = convertir_a_dataframe(resultado_2)
-    resultado_3_df = convertir_a_dataframe(resultado_3)
-    resultado_4_df = convertir_a_dataframe(resultado_4)
-    resultado_5_df = convertir_a_dataframe(resultado_5)
+    df_resumen_peliculas = convertir_a_dataframe(resultado_2)
+    df_resumen_categorias = convertir_a_dataframe(resultado_3)
+    df_perfil_clientes = convertir_a_dataframe(resultado_4)
 
-    if not resultado_2_df.empty:
-        resultado_2_df['popularidad_norm'] = normalizar_serie(resultado_2_df['total_alquileres'])
-        resultado_2_df['ingreso_norm'] = normalizar_serie(resultado_2_df['ingreso_promedio'])
-        if 'duracion_promedio' in resultado_2_df.columns:
-            duracion = pd.to_numeric(resultado_2_df['duracion_promedio'], errors='coerce')
-            resultado_2_df['duracion_norm'] = normalizar_serie(duracion.fillna(duracion.median()))
+    if not df_resumen_peliculas.empty:
+        df_resumen_peliculas['popularidad_norm'] = normalizar_serie(df_resumen_peliculas['total_alquileres'])
+        df_resumen_peliculas['ingreso_norm'] = normalizar_serie(df_resumen_peliculas['ingreso_promedio'])
+        if 'duracion_promedio' in df_resumen_peliculas.columns:
+            duracion = pd.to_numeric(df_resumen_peliculas['duracion_promedio'], errors='coerce')
+            df_resumen_peliculas['duracion_norm'] = normalizar_serie(duracion.fillna(duracion.median()))
         else:
-            resultado_2_df['duracion_norm'] = 0.0
+            df_resumen_peliculas['duracion_norm'] = 0.0
 
-    if not resultado_3_df.empty:
-        resultado_3_df['popularidad_categoria_norm'] = normalizar_serie(resultado_3_df['total_alquileres'])
-        resultado_3_df['ingreso_categoria_norm'] = normalizar_serie(resultado_3_df['ingreso_promedio'])
-        resultado_3_df['score_categoria_global'] = (
-            resultado_3_df['popularidad_categoria_norm'] * 0.6
-            + resultado_3_df['ingreso_categoria_norm'] * 0.4
+    if not df_resumen_categorias.empty:
+        df_resumen_categorias['popularidad_categoria_norm'] = normalizar_serie(df_resumen_categorias['total_alquileres'])
+        df_resumen_categorias['ingreso_categoria_norm'] = normalizar_serie(df_resumen_categorias['ingreso_promedio'])
+        df_resumen_categorias['score_categoria_global'] = (
+            df_resumen_categorias['popularidad_categoria_norm'] * 0.6
+            + df_resumen_categorias['ingreso_categoria_norm'] * 0.4
         )
 
-    if not resultado_4_df.empty:
-        resultado_4_df['actividad_norm'] = normalizar_serie(resultado_4_df['total_alquileres'])
-        resultado_4_df['gasto_norm'] = normalizar_serie(resultado_4_df['gasto_promedio'])
-
-    df_clusters_clientes = construir_clusters_clientes(resultado_4_df, n_clusters=3)
+    if not df_perfil_clientes.empty:
+        df_perfil_clientes['actividad_norm'] = normalizar_serie(df_perfil_clientes['total_alquileres'])
+        df_perfil_clientes['gasto_norm'] = normalizar_serie(df_perfil_clientes['gasto_promedio'])
 
     return {
-        'resultado_1_df': resultado_1_df,
-        'resultado_2_df': resultado_2_df,
-        'resultado_3_df': resultado_3_df,
-        'resultado_4_df': resultado_4_df,
-        'resultado_5_df': resultado_5_df,
-        'df_resumen_peliculas': resultado_2_df,
-        'df_resumen_categorias': resultado_3_df,
-        'df_perfil_clientes': resultado_4_df,
-        'df_clusters_clientes': df_clusters_clientes,
+        'df_resumen_peliculas': df_resumen_peliculas,
+        'df_resumen_categorias': df_resumen_categorias,
+        'df_perfil_clientes': df_perfil_clientes,
     }
 
 
 def main() -> None:
     dfs = construir_dataframes_desde_mongo(top_n=10)
 
-    for nombre in ['resultado_1_df', 'resultado_2_df', 'resultado_3_df', 'resultado_4_df', 'resultado_5_df']:
+    for nombre in ['df_resumen_peliculas', 'df_resumen_categorias', 'df_perfil_clientes']:
         print(f'\n{nombre}:')
         df = dfs.get(nombre, pd.DataFrame())
         if df.empty:

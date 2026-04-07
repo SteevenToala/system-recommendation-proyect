@@ -28,6 +28,13 @@ El cargador elimina los IDs tecnicos y agrega campos legibles como `cliente_nomb
 python vistas/analisis_clusters.py
 ```
 
+El analisis grafico usa solo segmentacion KMeans de clientes e incluye:
+- clientes por segmento
+- boxplot de gasto promedio por segmento
+- dispersion actividad vs gasto (tamano por peliculas unicas)
+- mapa de calor de centros KMeans normalizados
+- comparativa de gasto/actividad promedio por cluster
+
 ## Sistema de recomendacion
 
 ```bash
@@ -36,7 +43,7 @@ python vistas/interfaz_recomendacion.py
 
 La interfaz permite seleccionar cliente y generar recomendaciones sin argumentos por consola.
 
-El modelo usa varios DataFrames de soporte construidos desde MongoDB:
+El modelo usa los DataFrames de soporte realmente necesarios construidos desde MongoDB:
 
 - perfil de clientes (actividad, gasto promedio, variedad)
 - resumen de peliculas (popularidad, ingreso promedio, duracion)
@@ -46,7 +53,7 @@ El modelo usa varios DataFrames de soporte construidos desde MongoDB:
 
 Con esos DataFrames calcula un score hibrido que combina similitud colaborativa, afinidad de categoria, popularidad, ajuste al perfil del cliente, senal temporal y un pequeno factor de diversidad.
 
-Ademas, el recomendador integra DataFrames agregados desde Mongo construidos en `dataframepymongo_proyecto.py` (estilo `dataframepymongo_sakila.py`) para reforzar los perfiles de cliente, pelicula y categoria.
+El algoritmo se declara explicitamente dentro de la funcion de recomendacion: hibrido (similitud coseno cliente-cliente + senales de contenido + ajuste por cluster KMeans).
 
 ## DataFrames desde Mongo (estilo Sakila)
 
@@ -67,9 +74,9 @@ Desde la ventana puedes seleccionar cliente, definir cantidad de recomendaciones
 ## Arquitectura
 
 - `logica/carga_datos.py`: carga desde Excel, enriquecimiento y subida a Mongo.
-- `logica/dataframes.py`: construccion de dataframes agregados y segmentacion de clientes.
+- `logica/dataframes.py`: construccion de dataframes agregados y features base.
 - `logica/recomendacion.py`: motor de recomendacion y scoring (ejecutable en consola).
-- `logica/clusters.py`: logica de segmentacion para analisis de clusters (ejecutable en consola).
+- `logica/clusters.py`: logica KMeans de segmentacion y exportacion para analisis de clusters (ejecutable en consola).
 - `vistas/interfaz_recomendacion.py`: vista Tkinter del recomendador.
 - `vistas/analisis_clusters.py`: vista y graficas del analisis de clusters.
 
