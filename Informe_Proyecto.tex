@@ -1,0 +1,269 @@
+﻿\documentclass{article}
+
+% Language setting
+% Replace `english' with e.g. `spanish' to change the document language
+
+\usepackage[letterpaper,top=2cm,bottom=5cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
+\usepackage{fontawesome5}
+% Useful packages
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+\usepackage{amssymb,stackengine}
+\usepackage{fancyhdr}
+\usepackage{lipsum} % Para generar texto de ejemplo
+\usepackage{multicol}
+\pagestyle{fancy}
+% PAQUETES QUE NO SON DEL FORMATO
+\usepackage{tabularx}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{adjustbox}
+\usepackage{graphicx}   % Para imagenes
+\usepackage{caption}    % Para captionof sin figure flotante
+\usepackage[spanish]{babel} % Si quieres que "Figura" salga en espanol
+
+\newcommand{\checkedbox}{\stackinset{c}{0pt}{c}{0pt}{\checkmark}{$\square$}}
+\newcommand{\espacioimagen}[2]{%
+\IfFileExists{#1}{%
+\includegraphics[width=0.92\textwidth]{#1}%
+}{%
+\fbox{\parbox[c][5.8cm][c]{0.90\textwidth}{\centering Espacio reservado para #2\\(agregar imagen en #1)}}%
+}%
+}
+
+\fancyhf{} % Limpiar encabezado y pie de pagina por defecto
+\setlength{\headheight}{70pt} % Ajuste del tamano del encabezado (puedes aumentar este valor si es necesario)
+
+% Definicion del encabezado
+\fancyhead[C]{%
+    \begin{minipage}[c]{2.5cm}
+        \centering
+        \IfFileExists{imagenes/uta.png}{\includegraphics[width=2.2cm]{imagenes/uta.png}}{\textbf{UTA}}
+    \end{minipage}%
+    \hfill
+    \begin{minipage}[c]{8cm}
+        \centering
+        \small {\textbf{UNIVERSIDAD TECNICA DE AMBATO}} \\[0.1cm]
+        \scriptsize \textit{FACULTAD DE INGENIERIA EN SISTEMAS ELECTRONICA E INDUSTRIAL} \\[0.1cm]
+        \scriptsize \textbf{CARRERA DE SOFTWARE} \\[0.1cm]
+        \scriptsize \textbf{CICLO ACADEMICO: FEBRERO - JULIO 2026}
+    \end{minipage}%
+    \hfill
+    \begin{minipage}[c]{2.5cm}
+        \centering
+        \IfFileExists{imagenes/fisei.png}{\includegraphics[width=2.2cm]{imagenes/fisei.png}}{\textbf{FISEI}}
+    \end{minipage}%
+}
+
+\begin{document}
+\begin{center}
+    {\large \textbf{INFORME DE GUIA PRACTICA}} \\
+\end{center}
+
+\section{Portada}
+\begin{flushleft}
+\begin{tabular}{ l l }
+    \textbf{Tema:} & Sistema BI de segmentacion KMeans y recomendacion hibrida \\
+    \textbf{Unidad de Organizacion Curricular:} & Profesional. \\
+    \textbf{Nivel y Paralelo:} & 6to - A \\
+    \textbf{Alumnos participantes:} & Toala Camacho Steeven Santiago. \\
+    \textbf{Asignatura:} & Inteligencia de Negocios \\
+    \textbf{Docente:} & Mg. Ing. Ruben Nogales. \\
+\end{tabular}
+\end{flushleft}
+
+
+\section{Informe}
+\subsection{Objetivos}
+
+\subsubsection{General}
+Desarrollar un flujo integral de analitica de datos para alquiler de peliculas que permita cargar y enriquecer informacion en MongoDB, segmentar clientes con KMeans y generar recomendaciones explicables para soporte de decisiones.
+
+
+\subsubsection{Especificos}
+\begin{itemize}
+    \item Integrar datos de hechos y dimensiones desde Excel hacia un modelo enriquecido y legible para negocio.
+    \item Construir DataFrames agregados utiles para analisis de peliculas, categorias y perfiles de clientes.
+    \item Implementar segmentacion de clientes usando KMeans con variables de actividad, gasto y variedad.
+    \item Desarrollar un recomendador hibrido que combine filtrado colaborativo, contenido y ajuste por cluster.
+    \item Mejorar la interpretabilidad mediante motivos de recomendacion y desglose del calculo del score final.
+    \item Presentar resultados mediante interfaz grafica y visualizaciones de clusters orientadas a usuarios no tecnicos.
+\end{itemize}
+
+\subsection{Introduccion}
+El proyecto implementa una arquitectura por capas para resolver un caso de negocio de recomendacion sobre datos de alquiler. Primero se construye un proceso ETL que toma \texttt{BI-FINAL.xlsx}, integra dimensiones (cliente, pelicula, categoria, tiempo, tienda, ciudad y actores) y publica un fact enriquecido en JSON y MongoDB. Como parte de la limpieza, se eliminan IDs tecnicos de la salida analitica para trabajar con referencias legibles.
+
+Sobre esta base se generan DataFrames agregados desde MongoDB: resumen de peliculas, resumen de categorias y perfil de clientes. Estos artefactos alimentan dos componentes clave:
+\begin{itemize}
+    \item Segmentacion de clientes con KMeans en \texttt{logica/clusters.py}.
+    \item Recomendacion hibrida en \texttt{logica/recomendacion.py}.
+\end{itemize}
+
+El recomendador combina once senales ponderadas, entre ellas similitud coseno cliente-cliente, afinidad por categoria, popularidad, ajuste temporal y ajuste por segmento KMeans. El score final se calcula como suma ponderada:
+
+\[
+\text{score\_final} = \sum_{i=1}^{11} w_i s_i
+\]
+
+Con la implementacion actual:
+
+\begin{align*}
+\text{score\_final} =
+&\;0.30\,s_{colaborativo} + 0.16\,s_{categoria} + 0.11\,s_{popularidad} + 0.07\,s_{ingreso} \\
+&+ 0.05\,s_{duracion} + 0.08\,s_{categoria\_global} + 0.07\,s_{ajuste\_cliente} \\
+&+ 0.04\,s_{temporal} + 0.02\,s_{diversidad} + 0.06\,s_{cluster\_ajuste} + 0.04\,s_{cluster\_categoria}
+\end{align*}
+
+En la interfaz Tkinter, el usuario puede seleccionar cliente, generar recomendaciones, visualizar motivo principal y revisar el detalle matematico del score por pelicula. En paralelo, la vista de clusters entrega graficos en ventanas separadas con descripciones para facilitar interpretacion.
+
+\subsection{Desarrollo tecnico (resumen de implementacion)}
+\begin{itemize}
+    \item \textbf{Carga y enriquecimiento:} lectura de hojas, conversion de tipos, joins dimensionales, armado de \texttt{cliente\_nombre\_completo}, consolidacion de actores y persistencia en MongoDB.
+    \item \textbf{DataFrames agregados:} calculo de metricas de peliculas (popularidad, ingreso, duracion), categorias (ingreso y volumen) y clientes (actividad, gasto, variedad).
+    \item \textbf{KMeans:} estandarizacion con \texttt{StandardScaler}, entrenamiento con \texttt{random\_state=42}, y etiquetado interpretable de segmentos (Mayor gasto, Gasto medio, Menor gasto).
+    \item \textbf{Recomendacion:} calculo de vecinos por similitud coseno, construccion de candidatos no vistos, evaluacion de senales y ranking por score final.
+    \item \textbf{Explicabilidad:} generacion de texto de motivo y bloque de desglose numerico de aportes por componente.
+    \item \textbf{Visualizacion:} graficos de tamano de segmento, similitud de clientes en 2D, perfil comparativo y mapa de calor con lenguaje orientado a usuario final.
+\end{itemize}
+
+\subsection{Metodologia aplicada}
+El desarrollo se ejecuto de manera incremental, validando cada capa antes de avanzar a la siguiente para evitar errores acumulados.
+
+\subsubsection{Fase 1: Integracion y calidad de datos}
+\begin{itemize}
+    \item Se definio un flujo ETL para convertir datos de origen en un fact enriquecido.
+    \item Se normalizaron tipos numericos y se descartaron registros invalidos para evitar ruido en el modelado.
+    \item Se reemplazaron identificadores tecnicos por referencias legibles para mejorar comprension en reportes y UI.
+\end{itemize}
+
+\subsubsection{Fase 2: Modelado analitico}
+\begin{itemize}
+    \item Se construyeron agregados de peliculas, categorias y clientes como capa semantica reusable.
+    \item Se aplico KMeans sobre variables estandarizadas para evitar sesgo por escala.
+    \item Se etiquetaron segmentos por gasto para hacer la segmentacion interpretable en lenguaje de negocio.
+\end{itemize}
+
+\subsubsection{Fase 3: Motor de recomendacion}
+\begin{itemize}
+    \item Se construyo matriz cliente-pelicula para similitud colaborativa.
+    \item Se incorporaron senales de contenido y contexto temporal para reducir recomendaciones triviales.
+    \item Se incluyo ajuste por cluster para alinear recomendaciones al perfil de segmento.
+\end{itemize}
+
+\subsubsection{Fase 4: Explicabilidad y visualizacion}
+\begin{itemize}
+    \item Se implemento motivo principal y desglose de aportes por componente del score.
+    \item Se mejoraron textos y etiquetas de graficos para usuarios no tecnicos.
+    \item Se separaron visualizaciones por ventana para facilitar lectura y comparacion.
+\end{itemize}
+
+\subsection{Arquitectura y flujo operacional}
+\begin{enumerate}
+    \item \textbf{Entrada:} archivo \texttt{BI-FINAL.xlsx} con tabla de hechos y dimensiones.
+    \item \textbf{ETL:} enriquecimiento y persistencia en JSON + MongoDB.
+    \item \textbf{Analitica base:} calculo de DataFrames agregados desde MongoDB.
+    \item \textbf{Segmentacion:} agrupacion de clientes mediante KMeans.
+    \item \textbf{Recomendacion:} ranking hibrido con score ponderado.
+    \item \textbf{Presentacion:} interfaz Tkinter y graficos de interpretacion.
+\end{enumerate}
+
+\subsection{Validaciones realizadas}
+\begin{itemize}
+    \item Verificacion de carga correcta en MongoDB y consistencia del numero de registros.
+    \item Validacion de columnas criticas para clustering y recomendacion.
+    \item Revision de ejecutabilidad de scripts en \texttt{logica/} y \texttt{vistas/}.
+    \item Comprobacion de explicaciones de score y legibilidad de interfaz.
+\end{itemize}
+
+\subsection{Resultados obtenidos}
+\begin{itemize}
+    \item Pipeline completo funcional: Excel $\rightarrow$ JSON/MongoDB $\rightarrow$ Clusters $\rightarrow$ Recomendaciones.
+    \item Segmentacion estable y reusable para analisis y para mejorar el score del recomendador.
+    \item Recomendaciones explicables, con trazabilidad de cada componente del score.
+    \item Interfaz mejorada en legibilidad de motivos y detalle de calculo.
+    \item Graficos de cluster reetiquetados para usuarios sin perfil tecnico.
+\end{itemize}
+
+\subsection{Evidencia grafica de resultados}
+En esta seccion se dejan espacios para insertar capturas reales de la ejecucion del sistema.
+
+\begin{figure}[H]
+    \centering
+    \espacioimagen{imagenes/graficoclientessegmento.png}{grafico de cantidad de clientes por segmento}
+    \caption{Distribucion de clientes por segmento}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \espacioimagen{imagenes/graficosimilitudclientes.png}{grafico de similitud de comportamiento de clientes}
+    \caption{Mapa de similitud de comportamiento de clientes}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \espacioimagen{imagenes/grafico_perfil_segmento.png}{grafico comparativo de perfil por segmento}
+    \caption{Comparacion de perfil por segmento}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \espacioimagen{imagenes/grafico_resumen_segmento.png}{mapa de calor de resumen por segmento}
+    \caption{Resumen rapido por segmento}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \espacioimagen{imagenes/interfaz_recomendacion.png}{captura de la interfaz de recomendacion}
+    \caption{Interfaz de recomendacion con detalle de score}
+\end{figure}
+
+\subsection{Conclusiones}
+
+\begin{itemize}
+    \item Se logro una solucion BI integral, coherente y mantenible al separar responsabilidades entre modulos de logica y vistas.
+    \item El uso de KMeans sobre perfiles de cliente aporta valor tanto analitico como operativo dentro del sistema de recomendacion.
+    \item La explicabilidad del score final mejora la confianza en las recomendaciones y facilita su validacion por parte de usuarios de negocio.
+    \item El ajuste de etiquetas y textos en visualizaciones fue clave para que la interpretacion no dependa de conocimientos tecnicos de programacion o modelado.
+\end{itemize}
+
+
+\subsection{Recomendaciones}
+
+\begin{itemize}
+    \item Incorporar seleccion automatica de numero de clusters (metodo codo/silhouette) para robustecer el modelado.
+    \item Medir desempeno del recomendador con metricas offline como Precision@K y Recall@K.
+    \item Agregar historico de ejecuciones para comparar evolucion de segmentos y cambios de comportamiento.
+    \item Estandarizar la plantilla de reportes del proyecto para futuras iteraciones y evidencias academicas.
+\end{itemize}
+
+
+\subsection{Referencias}
+
+\begin{thebibliography}{9}
+\bibitem{sklearn}
+scikit-learn Developers,
+\textit{scikit-learn User Guide},
+\url{https://scikit-learn.org/stable/user_guide.html}
+
+\bibitem{pandas}
+The pandas development team,
+\textit{pandas Documentation},
+\url{https://pandas.pydata.org/docs/}
+
+\bibitem{pymongo}
+MongoDB Inc.,
+\textit{PyMongo Documentation},
+\url{https://pymongo.readthedocs.io/}
+
+\bibitem{matplotlib}
+Matplotlib Development Team,
+\textit{Matplotlib Documentation},
+\url{https://matplotlib.org/stable/}
+\end{thebibliography}
+
+
+
+\vfill
+
+\end{document}
