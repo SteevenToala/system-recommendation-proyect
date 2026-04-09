@@ -1,3 +1,5 @@
+"""Visualización del análisis de clusters de clientes."""
+
 import sys
 from pathlib import Path
 
@@ -17,15 +19,18 @@ plt.style.use('seaborn-v0_8-whitegrid')
 
 
 def _normalizar_dataframe(df):
+    """Escala un DataFrame al rango 0-1 por columna."""
     return (df - df.min()) / (df.max() - df.min()).replace(0, 1)
 
 
 def _preparar_colores(resumen):
+    """Asigna un color estable a cada cluster."""
     paleta = ['#2E8B57', '#1F77B4', '#D62728', '#FF7F0E', '#17BECF', '#9467BD']
     return {nombre: paleta[idx % len(paleta)] for idx, nombre in enumerate(resumen.index.tolist())}
 
 
 def _dimensionar_y_centrar_figura(fig, ancho_px=820, alto_px=520):
+    """Ajusta el tamaño de la figura y la centra si el backend lo permite."""
     try:
         manager = plt.get_current_fig_manager()
         ventana = getattr(manager, 'window', None)
@@ -46,6 +51,7 @@ def _dimensionar_y_centrar_figura(fig, ancho_px=820, alto_px=520):
 
 
 def _mostrar_figura_ajustada(fig, ancho_px, alto_px):
+    """Muestra la figura fijando su tamaño después del primer render."""
     _dimensionar_y_centrar_figura(fig, ancho_px=ancho_px, alto_px=alto_px)
 
     # Algunos backends reajustan la ventana tras el primer render; volvemos a fijar tamano.
@@ -67,6 +73,7 @@ def _mostrar_figura_ajustada(fig, ancho_px, alto_px):
 
 
 def _agregar_descripcion(ax, texto):
+    """Coloca una breve explicación dentro del gráfico."""
     ax.text(
         0.01,
         0.01,
@@ -80,6 +87,7 @@ def _agregar_descripcion(ax, texto):
 
 
 def main() -> None:
+    """Genera el reporte de clusters y abre las cuatro visualizaciones."""
     df, resumen = obtener_segmentacion_clientes(top_n=10)
 
     print('=== INFORME DE SEGMENTACION BI - CLIENTES ===\n')

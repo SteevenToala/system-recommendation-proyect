@@ -1,3 +1,9 @@
+"""Motor de recomendación híbrido del proyecto.
+
+La interfaz permite elegir entre tres estrategias:
+similitud de coseno, item-item y Slope One.
+"""
+
 import numpy as np
 import pandas as pd
 import sys
@@ -9,7 +15,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from logica.clusters import construir_clusters_clientes
-from logica.dataframes import construir_dataframes_desde_mongo
+from logica.dataframes import construir_dataframes_desde_mongo, normalizar_serie
 
 
 MONGO_URI = 'mongodb://localhost:27017/'
@@ -18,6 +24,7 @@ COLLECTION_NAME = 'fact_alquiler'
 
 
 def cargar_datos_mongo() -> pd.DataFrame:
+    """Carga la colección de MongoDB que alimenta los algoritmos."""
     client = MongoClient(MONGO_URI)
     db = client[DB_NAME]
     collection = db[COLLECTION_NAME]
@@ -28,6 +35,7 @@ def cargar_datos_mongo() -> pd.DataFrame:
 
 
 def preparar_datos(df: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza tipos y genera referencias legibles para clientes y películas."""
     df = df.copy()
     if 'ingreso' not in df.columns:
         raise ValueError('Falta la columna ingreso para recomendar.')
@@ -65,21 +73,14 @@ def preparar_datos(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def normalizar_serie(serie: pd.Series) -> pd.Series:
-    serie = pd.to_numeric(serie, errors='coerce').fillna(0)
-    minimo = float(serie.min())
-    maximo = float(serie.max())
-    if maximo == minimo:
-        return pd.Series(np.zeros(len(serie)), index=serie.index)
-    return (serie - minimo) / (maximo - minimo)
-
-
 def normalizar_matriz_filas(matriz: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza cada fila de una matriz para que su suma sea 1."""
     suma_filas = matriz.sum(axis=1).replace(0, np.nan)
     return matriz.div(suma_filas, axis=0).fillna(0.0)
 
 
 def construir_matriz_clientes_peliculas(df: pd.DataFrame) -> pd.DataFrame:
+    """Construye la matriz cliente-película usada por el filtrado colaborativo."""
     return pd.pivot_table(
         df,
         index='cliente_ref',
@@ -91,6 +92,7 @@ def construir_matriz_clientes_peliculas(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def construir_matriz_valoraciones(df: pd.DataFrame) -> pd.DataFrame:
+    """Construye la matriz de valoraciones medias cliente-película."""
     return pd.pivot_table(
         df,
         index='cliente_ref',
@@ -101,6 +103,7 @@ def construir_matriz_valoraciones(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def construir_df_clientes(df: pd.DataFrame) -> pd.DataFrame:
+    """Resume el comportamiento de cada cliente en indicadores entendibles."""
     clientes = df.groupby('cliente_ref').agg(
         total_alquileres=('pelicula_ref', 'count'),
         peliculas_unicas=('pelicula_ref', 'nunique'),
@@ -114,6 +117,7 @@ def construir_df_clientes(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def resumir_peliculas(df: pd.DataFrame) -> pd.DataFrame:
+    """Resume cada película con métricas útiles para explicar la recomendación."""
     resumen = df.groupby('pelicula_ref').agg(
         pelicula_titulo=('pelicula_titulo', 'first') if 'pelicula_titulo' in df.columns else ('pelicula_ref', 'first'),
         categoria_nombre=('categoria_nombre', 'first'),
@@ -139,6 +143,7 @@ def resumir_peliculas(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def construir_df_categorias(df: pd.DataFrame) -> pd.DataFrame:
+    """Calcula el perfil global de cada categoría."""
     categorias = df.groupby('categoria_nombre').agg(
         total_alquileres=('pelicula_ref', 'count'),
         clientes_unicos=('cliente_ref', 'nunique'),
@@ -154,6 +159,7 @@ def construir_df_categorias(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def construir_df_cliente_categoria_norm(df: pd.DataFrame) -> pd.DataFrame:
+    """Construye la distribución de categorías por cliente."""
     base = pd.pivot_table(
         df,
         index='cliente_ref',
@@ -166,6 +172,7 @@ def construir_df_cliente_categoria_norm(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def construir_df_cliente_mes_norm(df: pd.DataFrame) -> pd.DataFrame:
+    """Construye el perfil temporal de consumo por cliente."""
     if 'tiempo_mes' not in df.columns:
         return pd.DataFrame()
     base = df.copy()
@@ -186,6 +193,7 @@ def construir_df_cliente_mes_norm(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def construir_df_pelicula_mes_norm(df: pd.DataFrame) -> pd.DataFrame:
+    """Construye el perfil temporal de consumo por película."""
     if 'tiempo_mes' not in df.columns:
         return pd.DataFrame()
     base = df.copy()
@@ -206,6 +214,7 @@ def construir_df_pelicula_mes_norm(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def construir_dataframes_modelo(df: pd.DataFrame):
+    """Agrupa los DataFrames auxiliares que usan los tres algoritmos."""
     dataframes_base = {
         'clientes': construir_df_clientes(df),
         'peliculas': resumir_peliculas(df),
@@ -235,6 +244,7 @@ def construir_dataframes_modelo(df: pd.DataFrame):
 
 
 def calcular_similitud_coseno(matriz: pd.DataFrame, cliente_id: str) -> pd.Series:
+    """Calcula la similitud coseno entre un cliente y el resto."""
     if cliente_id not in matriz.index:
         raise ValueError(f'No existe historial para el cliente {cliente_id}.')
 
@@ -258,13 +268,15 @@ def calcular_similitud_coseno(matriz: pd.DataFrame, cliente_id: str) -> pd.Serie
 
 
 def construir_preferencias_categoria(df: pd.DataFrame, cliente_id: str) -> pd.Series:
+    """Obtiene la distribución de categorías vistas por un cliente."""
     historial = df[df['cliente_ref'] == cliente_id]
     if historial.empty:
         return pd.Series(dtype=float)
     return historial['categoria_nombre'].astype(str).value_counts(normalize=True).sort_values(ascending=False)
 
 
-def construir_motivo(fila: pd.Series, categorias_preferidas: pd.Series | None = None) -> str:
+def construir_motivo(fila: pd.Series, categorias_preferidas: pd.Series = None) -> str:
+    """Genera una explicación corta y fácil de leer para cada recomendación."""
     score = float(fila.get('score_final', 0.0))
     categoria = str(fila.get('categoria_nombre', '')).strip()
 
@@ -285,6 +297,7 @@ def construir_motivo(fila: pd.Series, categorias_preferidas: pd.Series | None = 
 
 
 def construir_motivo_detallado(fila: pd.Series, lineas_extra=None) -> str:
+    """Explica el cálculo del score final con sus ponderaciones."""
     lineas = [
         f"Pelicula: {fila.get('pelicula_titulo', '')}",
         f"Categoria: {fila.get('categoria_nombre', '')}",

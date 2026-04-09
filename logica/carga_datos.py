@@ -1,3 +1,5 @@
+"""Carga y enriquecimiento de la tabla fact para el proyecto."""
+
 import json
 from pathlib import Path
 
@@ -12,16 +14,23 @@ MONGO_URI = 'mongodb://localhost:27017/'
 DB_NAME = 'BI_Final'
 COLLECTION_NAME = 'fact_alquiler'
 
+COLUMNAS_FACT_NUMERICAS = [
+    'id_hecho', 'id_tiempo', 'id_cliente', 'id_pelicula', 'id_tienda',
+    'id_categoria', 'id_ciudad', 'cantidad_alquiler', 'ingreso', 'duracion_alquiler',
+]
+
 
 def cargar_hoja(excel: pd.ExcelFile, nombre_hoja: str) -> pd.DataFrame:
+    """Carga una hoja específica del archivo Excel."""
     if nombre_hoja not in excel.sheet_names:
         raise ValueError(f'No existe la hoja requerida: {nombre_hoja}')
     return excel.parse(nombre_hoja)
 
 
 def leer_tablas() -> dict:
+    """Lee todas las tablas del modelo estrella desde el Excel."""
     excel = pd.ExcelFile(RUTA_EXCEL)
-    tablas = {
+    return {
         'fact': cargar_hoja(excel, 'FACT_ALQUILER'),
         'actor': cargar_hoja(excel, 'DIM_ACTOR'),
         'categoria': cargar_hoja(excel, 'DIM_CATEGORIA'),
@@ -32,88 +41,108 @@ def leer_tablas() -> dict:
         'tienda': cargar_hoja(excel, 'DIM_TIENDA'),
         'puente': cargar_hoja(excel, 'PUENTE_PELICULA_ACTOR'),
     }
-    return tablas
 
 
 def preparar_fact(df: pd.DataFrame) -> pd.DataFrame:
+    """Convierte columnas clave a numéricas y elimina registros sin ingreso."""
     df = df.copy()
-    columnas_numericas = [
-        'id_hecho', 'id_tiempo', 'id_cliente', 'id_pelicula', 'id_tienda',
-        'id_categoria', 'id_ciudad', 'cantidad_alquiler', 'ingreso', 'duracion_alquiler'
-    ]
-    for columna in columnas_numericas:
+    for columna in COLUMNAS_FACT_NUMERICAS:
         if columna in df.columns:
             df[columna] = pd.to_numeric(df[columna], errors='coerce')
 
-    df = df.dropna(subset=['ingreso'])
-    return df
+    return df.dropna(subset=['ingreso'])
 
 
-def unir_dimensiones(tablas: dict) -> pd.DataFrame:
-    fact = preparar_fact(tablas['fact'])
+def _seleccionar_y_renombrar(df: pd.DataFrame, columnas: list[str], renombres: dict[str, str]) -> pd.DataFrame:
+    """Selecciona columnas útiles y aplica nombres más legibles."""
+    return df[columnas].rename(columns=renombres)
 
-    cliente = tablas['cliente'][['id_cliente', 'nombre', 'apellido', 'email', 'activo']].rename(
-        columns={
-            'nombre': 'cliente_nombre',
-            'apellido': 'cliente_apellido',
-            'email': 'cliente_email',
-            'activo': 'cliente_activo',
-        }
-    )
-    categoria = tablas['categoria'][['id_categoria', 'nombre_categoria']].rename(
-        columns={'nombre_categoria': 'categoria_nombre'}
-    )
-    ciudad = tablas['ciudad'][['id_ciudad', 'ciudad', 'pais']].rename(
-        columns={'ciudad': 'ciudad_nombre', 'pais': 'ciudad_pais'}
-    )
-    pelicula = tablas['pelicula'][
-        ['id_pelicula', 'titulo', 'duracion', 'clasificacion', 'anio_lanzamiento', 'idioma', 'precio_renta', 'costo_reposicion']
-    ].rename(
-        columns={
-            'titulo': 'pelicula_titulo',
-            'duracion': 'pelicula_duracion',
-            'clasificacion': 'pelicula_clasificacion',
-            'anio_lanzamiento': 'pelicula_anio_lanzamiento',
-            'idioma': 'pelicula_idioma',
-            'precio_renta': 'pelicula_precio_renta',
-            'costo_reposicion': 'pelicula_costo_reposicion',
-        }
-    )
-    tiempo = tablas['tiempo'][['id_tiempo', 'fecha', 'dia', 'mes', 'nombre_mes', 'trimestre', 'anio']].rename(
-        columns={
-            'fecha': 'tiempo_fecha',
-            'dia': 'tiempo_dia',
-            'mes': 'tiempo_mes',
-            'nombre_mes': 'tiempo_nombre_mes',
-            'trimestre': 'tiempo_trimestre',
-            'anio': 'tiempo_anio',
-        }
-    )
-    tienda = tablas['tienda'][['id_tienda', 'nombre_tienda']].rename(
-        columns={'nombre_tienda': 'tienda_nombre'}
-    )
 
-    fact = fact.merge(cliente, on='id_cliente', how='left')
-    fact = fact.merge(categoria, on='id_categoria', how='left')
-    fact = fact.merge(ciudad, on='id_ciudad', how='left')
-    fact = fact.merge(pelicula, on='id_pelicula', how='left')
-    fact = fact.merge(tiempo, on='id_tiempo', how='left')
-    fact = fact.merge(tienda, on='id_tienda', how='left')
+def _construir_dimensiones(tablas: dict) -> dict[str, pd.DataFrame]:
+    """Prepara cada dimensión con sus nombres finales para el merge."""
+    return {
+        'cliente': _seleccionar_y_renombrar(
+            tablas['cliente'],
+            ['id_cliente', 'nombre', 'apellido', 'email', 'activo'],
+            {
+                'nombre': 'cliente_nombre',
+                'apellido': 'cliente_apellido',
+                'email': 'cliente_email',
+                'activo': 'cliente_activo',
+            },
+        ),
+        'categoria': _seleccionar_y_renombrar(
+            tablas['categoria'],
+            ['id_categoria', 'nombre_categoria'],
+            {'nombre_categoria': 'categoria_nombre'},
+        ),
+        'ciudad': _seleccionar_y_renombrar(
+            tablas['ciudad'],
+            ['id_ciudad', 'ciudad', 'pais'],
+            {'ciudad': 'ciudad_nombre', 'pais': 'ciudad_pais'},
+        ),
+        'pelicula': _seleccionar_y_renombrar(
+            tablas['pelicula'],
+            ['id_pelicula', 'titulo', 'duracion', 'clasificacion', 'anio_lanzamiento', 'idioma', 'precio_renta', 'costo_reposicion'],
+            {
+                'titulo': 'pelicula_titulo',
+                'duracion': 'pelicula_duracion',
+                'clasificacion': 'pelicula_clasificacion',
+                'anio_lanzamiento': 'pelicula_anio_lanzamiento',
+                'idioma': 'pelicula_idioma',
+                'precio_renta': 'pelicula_precio_renta',
+                'costo_reposicion': 'pelicula_costo_reposicion',
+            },
+        ),
+        'tiempo': _seleccionar_y_renombrar(
+            tablas['tiempo'],
+            ['id_tiempo', 'fecha', 'dia', 'mes', 'nombre_mes', 'trimestre', 'anio'],
+            {
+                'fecha': 'tiempo_fecha',
+                'dia': 'tiempo_dia',
+                'mes': 'tiempo_mes',
+                'nombre_mes': 'tiempo_nombre_mes',
+                'trimestre': 'tiempo_trimestre',
+                'anio': 'tiempo_anio',
+            },
+        ),
+        'tienda': _seleccionar_y_renombrar(
+            tablas['tienda'],
+            ['id_tienda', 'nombre_tienda'],
+            {'nombre_tienda': 'tienda_nombre'},
+        ),
+    }
 
+
+def _agrupar_actores(tablas: dict) -> pd.DataFrame:
+    """Agrupa actores por película para facilitar la explicación del dataset."""
     puente = tablas['puente'].merge(
         tablas['actor'][['id_actor', 'nombre_actor']],
         on='id_actor',
-        how='left'
+        how='left',
     )
-    actores = puente.groupby('id_pelicula').agg(
+
+    return puente.groupby('id_pelicula').agg(
         pelicula_actores=('nombre_actor', lambda serie: sorted({str(valor) for valor in serie.dropna()})),
-        cantidad_actores=('id_actor', 'nunique')
+        cantidad_actores=('id_actor', 'nunique'),
     ).reset_index()
 
-    fact = fact.merge(actores, on='id_pelicula', how='left')
+
+def unir_dimensiones(tablas: dict) -> pd.DataFrame:
+    """Enriquece la tabla fact con las dimensiones y métricas derivadas."""
+    fact = preparar_fact(tablas['fact'])
+    dimensiones = _construir_dimensiones(tablas)
+
+    for nombre_dim in ['cliente', 'categoria', 'ciudad', 'pelicula', 'tiempo', 'tienda']:
+        columna_id = f'id_{nombre_dim}'
+        fact = fact.merge(dimensiones[nombre_dim], on=columna_id, how='left')
+
+    fact = fact.merge(_agrupar_actores(tablas), on='id_pelicula', how='left')
 
     fact['cliente_nombre_completo'] = (
-        fact['cliente_nombre'].fillna('').astype(str).str.strip() + ' ' + fact['cliente_apellido'].fillna('').astype(str).str.strip()
+        fact['cliente_nombre'].fillna('').astype(str).str.strip()
+        + ' '
+        + fact['cliente_apellido'].fillna('').astype(str).str.strip()
     ).str.strip()
     fact.loc[fact['cliente_nombre_completo'] == '', 'cliente_nombre_completo'] = None
 
@@ -121,9 +150,9 @@ def unir_dimensiones(tablas: dict) -> pd.DataFrame:
 
 
 def guardar_json_y_mongo(df: pd.DataFrame) -> None:
+    """Guarda el fact enriquecido en JSON y en MongoDB."""
     columnas_sin_ids = [col for col in df.columns if not col.lower().startswith('id_')]
-    df_salida = df[columnas_sin_ids]
-    registros = df_salida.to_dict(orient='records')
+    registros = df[columnas_sin_ids].to_dict(orient='records')
 
     with open(RUTA_JSON, 'w', encoding='utf-8') as archivo:
         json.dump(registros, archivo, ensure_ascii=False, indent=4)
@@ -137,6 +166,7 @@ def guardar_json_y_mongo(df: pd.DataFrame) -> None:
 
 
 def main() -> None:
+    """Ejecuta la carga completa del archivo Excel hacia JSON y MongoDB."""
     if not RUTA_EXCEL.exists():
         raise FileNotFoundError(f'No se encontro el archivo Excel: {RUTA_EXCEL}')
 

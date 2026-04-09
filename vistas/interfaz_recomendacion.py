@@ -1,3 +1,5 @@
+"""Interfaz gráfica para ejecutar y comparar los algoritmos de recomendación."""
+
 import os
 import sys
 import tkinter as tk
@@ -18,9 +20,10 @@ from logica.recomendacion import (
     recomendar_peliculas,
 )
 
-
 class AppRecomendacion:
+    """Aplicación Tkinter que permite ejecutar los tres recomendadores."""
     def __init__(self, root: tk.Tk):
+        """Inicializa la ventana principal y carga los datos."""
         self.root = root
         self.root.title('Sistema de Recomendacion BI Final')
         self.root.geometry('1360x860')
@@ -40,6 +43,7 @@ class AppRecomendacion:
         self._cargar_datos_iniciales()
 
     def _build_ui(self):
+        """Construye la interfaz visual principal."""
         frame_superior = ttk.Frame(self.root, padding=12)
         frame_superior.pack(fill=tk.X)
 
@@ -117,6 +121,7 @@ class AppRecomendacion:
         self.txt_detalle.insert('1.0', 'Selecciona una recomendacion para ver una explicacion mas clara.')
 
     def _cargar_datos_iniciales(self):
+        """Carga datos desde Mongo y prepara el selector de clientes."""
         try:
             self.df = preparar_datos(cargar_datos_mongo())
             self.dataframes_modelo = construir_dataframes_modelo(self.df)
@@ -150,16 +155,19 @@ class AppRecomendacion:
         self.lbl_estado.config(text=f'Datos cargados: {len(self.df)} registros, {len(etiquetas)} clientes.')
 
     def _limpiar_tabla(self):
+        """Vacía la tabla de resultados antes de una nueva recomendación."""
         for item in self.tree.get_children():
             self.tree.delete(item)
 
     def _resumir_motivo(self, texto: str, max_chars: int = 95) -> str:
+        """Recorta el texto del motivo para mostrarlo en la tabla."""
         txt = str(texto or '').strip()
         if len(txt) <= max_chars:
             return txt
         return txt[: max_chars - 3].rstrip() + '...'
 
     def _obtener_cliente_seleccionado(self):
+        """Convierte la etiqueta visible del cliente en su identificador interno."""
         etiqueta = self.combo_clientes.get().strip()
         if not etiqueta:
             raise ValueError('Debes seleccionar un cliente.')
@@ -168,6 +176,7 @@ class AppRecomendacion:
         return self.mapa_etiqueta_a_cliente[etiqueta]
 
     def generar_recomendaciones(self):
+        """Ejecuta el algoritmo seleccionado y actualiza la vista."""
         try:
             if self.df is None:
                 raise ValueError('No hay datos cargados.')
@@ -217,6 +226,7 @@ class AppRecomendacion:
             self.lbl_estado.config(text='No se pudieron generar recomendaciones.')
 
     def _mostrar_contexto(self, contexto):
+        """Muestra un resumen textual del cliente y del algoritmo usado."""
         lineas = [
             f"Algoritmo: {contexto.get('algoritmo', '')}",
             f"Cliente: {contexto.get('cliente_mostrar', '')}",
@@ -242,6 +252,7 @@ class AppRecomendacion:
         self.txt_contexto.insert(tk.END, '\n'.join(lineas))
 
     def _mostrar_detalle_recomendacion(self, _event=None):
+        """Muestra el detalle de la recomendación seleccionada en la tabla."""
         seleccion = self.tree.selection()
         if not seleccion or self.recomendaciones_actuales.empty:
             return
@@ -266,6 +277,7 @@ class AppRecomendacion:
         self.txt_detalle.insert('1.0', '\n'.join(lineas))
 
     def exportar_csv(self):
+        """Exporta la última recomendación generada a un archivo CSV."""
         if self.recomendaciones_actuales.empty:
             messagebox.showwarning('Sin datos', 'Primero genera recomendaciones para poder exportar.')
             return
