@@ -298,7 +298,6 @@ class AppRecomendacion:
         except Exception as exc:
             messagebox.showerror('Error al exportar', str(exc))
 
-
 def main():
     root = tk.Tk()
     AppRecomendacion(root)
